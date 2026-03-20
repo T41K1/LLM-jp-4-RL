@@ -3,7 +3,7 @@
 #PBS -q rt_HF   
 #PBS -N 0316_llm-jp-4-rl
 #PBS -l select=1
-#PBS -l walltime=08:00:00
+#PBS -l walltime=30:00:00
 #PBS -j oe
 #PBS -o logs/
 #PBS -e logs/
@@ -32,10 +32,10 @@ source ./.env
 echo "WANDB_API_KEY: ${WANDB_API_KEY:0:6}..."
 
 #MODEL_PATH=/groups/gcg51557/experiments/0213_v4-8b/tasks/v4-8b-decay3m/checkpoints_hf/iter_3000000
-MODEL_PATH=/home/ach18309qq/model/v4-8b-decay3m-iter_3000000
+MODEL_PATH=/groups/gcg51557/experiments/0309_llmjp4_instruct5/checkpoints/nemo_to_hf/sft-1960947055
 
 project_name='0316_llm-jp-4-rl'
-exp_name='llmjp4-grpo-exp02-Phase1-Decay-6.3T'
+exp_name='llmjp4-grpo-exp02-Phase1-Instruct-Dev'
 
 
 python3 -m verl.trainer.main_ppo \

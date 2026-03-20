@@ -75,4 +75,5 @@ python3 -m verl.trainer.main_ppo \
     trainer.nnodes=1 \
     trainer.save_freq=20 \
     trainer.test_freq=5 \
+    trainer.log_val_generations=10 \
     trainer.total_epochs=15 $@

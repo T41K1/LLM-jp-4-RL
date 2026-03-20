@@ -18,6 +18,9 @@ dependencies = [
     "packaging>=25.0",
     "setuptools>=79.0.1",
     "wheel>=0.45.1",
+    "hf-cli>=0.1",
+    "hf>=1.1.0",
+    "sympy>=1.13",
 ]
 
 [tool.uv.sources]
