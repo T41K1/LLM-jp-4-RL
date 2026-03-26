@@ -33,5 +33,6 @@ def compute_score(
     """
     result = _verifier([], solution_str, ground_truth)
     matched = result.score > 0
+    #scoreに対して10倍をするのはOlmo3の設定値を踏襲
     score = result.score  # 1.0 or 0.0
     return {"score": score * 10.0, "acc": matched, "pred": solution_str}
