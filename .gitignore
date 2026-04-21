@@ -20,3 +20,6 @@ deps/
 .tmp/
 
 .claude/    
+
+#model
+model/
