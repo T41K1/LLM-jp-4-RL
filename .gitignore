@@ -18,3 +18,5 @@ outputs/
 checkpoints/
 deps/
 .tmp/
+
+.claude/    
