@@ -1,27 +1,31 @@
-#!/bin/sh
-#PBS -P gcg51557
-#PBS -q rt_HF
-#PBS -q R9920251000
-#PBS -N 0316_llm-jp-4-rl-val-aime
-#PBS -l select=1
-#PBS -l walltime=10:00:00
-#PBS -j oe
-#PBS -o logs/
-#PBS -e logs/
+#!/bin/bash
+#SBATCH --job-name=0316_llmjp4-eval-AIME24,25
+#SBATCH --partition=gpu
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:8
+#SBATCH --cpus-per-task=32
+#SBATCH --time=04:00:00
+#SBATCH --output=logs/%x-%j.out
+#SBATCH --error=logs/%x-%j.err
 
 # AIME2024 + AIME2025 を verl の val_only モードで評価
 # 前提: 下の parquet が存在していること
 #   data/AIME2024/test.parquet  (uv run python data_load/aime2024.py)
 #   data/AIME2025/test.parquet  (uv run python data_load/aime2025.py)
+#
+# 投入: sbatch exp/eval/val_aime_2024_2025.sh
+# 状態: squeue -u $USER
 
 set -xeuo pipefail
 
 echo "Current directory: $(pwd)"
-cd ${PBS_O_WORKDIR:-$(pwd)}
+cd ${SLURM_SUBMIT_DIR:-$(pwd)}
 echo "Current directory: $(pwd)"
 
-module reset
-module load cuda/12.2/12.2.2
+# moduleが使える環境なら (無ければコメントアウトOK)
+module reset 2>/dev/null || true
+module load cuda/12.2/12.2.2 2>/dev/null || true
 unset CUDA_VISIBLE_DEVICES
 
 export VLLM_USE_V1=1
