@@ -44,7 +44,7 @@ export WANDB_ENTITY=Research_00
 
 # 評価対象モデル (HFから model/ 以下にDL済み前提)
 #   uv run hf download llm-jp/llm-jp-4-8b-thinking --local-dir model/llm-jp-4-8b-thinking
-MODEL_PATH=model/llm-jp-4-8b-thinking
+MODEL_PATH=model/Qwen3-8B
 
 #valのtemperature
 val_temperature=1.0
@@ -52,7 +52,7 @@ val_temperature=1.0
 pass_at_k=1
 
 project_name='0316_llm-jp-4-rl-eval'
-exp_name="val-aime-2024-2025-llmjp-4-8b-thinking-${val_temperature}_${pass_at_k}"
+exp_name="val-aime-2024-2025-${MODEL_PATH}-${val_temperature}_${pass_at_k}"
 
 
 # 生成サンプルを jsonl として落とす先 (per-sample で目視確認用)

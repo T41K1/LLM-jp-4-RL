@@ -34,7 +34,7 @@ def build_row(example, idx, split):
         "extra_info": {
             "split": split,
             "index": idx,
-            "id": example["id"],
+            "id": str(example["id"]),
             "url": example["url"],
         },
     }

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=0316_llmjp4-eval-AIME24,25
+#SBATCH --job-name=0316_qwen3-8b-eval-AIME24,25
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -10,13 +10,20 @@
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 
-# AIME2024 + AIME2025 を verl の val_only モードで評価
-# 前提: 下の parquet が存在していること
+# Qwen3-8B を AIME2024 + AIME2025 で評価する検証用スクリプト
+# 目的: ベンチマーク(data / reward / verl val_only ループ)自体が正しく機能するか、
+#       公開スコアの存在する Qwen3-8B で sanity check する
+#
+# 参考 (公式公開値, thinking mode):
+#   - AIME2024: ~76
+#   - AIME2025: ~67
+#
+# 前提:
 #   data/AIME2024/test.parquet  (uv run python data_load/aime2024.py)
 #   data/AIME2025/test.parquet  (uv run python data_load/aime2025.py)
+#   model/Qwen3-8B              (uv run hf download Qwen/Qwen3-8B --local-dir model/Qwen3-8B)
 #
-# 投入: sbatch exp/eval/val_aime_2024_2025.sh
-# 状態: squeue -u $USER
+# 投入: sbatch exp/eval/val_aime_2024_2025_qwen3.sh
 
 set -xeuo pipefail
 
@@ -24,17 +31,16 @@ echo "Current directory: $(pwd)"
 cd ${SLURM_SUBMIT_DIR:-$(pwd)}
 echo "Current directory: $(pwd)"
 
-# moduleが使える環境なら (無ければコメントアウトOK)
 module reset 2>/dev/null || true
 module load cuda/12.2/12.2.2 2>/dev/null || true
 unset CUDA_VISIBLE_DEVICES
-unset ROCR_VISIBLE_DEVICES   # SLURMが自動設定する場合あり。verl workerがCUDAと衝突検知するのを防ぐ
+unset ROCR_VISIBLE_DEVICES
 
 export VLLM_USE_V1=1
 export RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
 source .venv/bin/activate
 
-set -a          # 以降の source で定義された変数を自動 export
+set -a
 source ./.env
 set +a
 echo "WANDB_API_KEY: ${WANDB_API_KEY:0:6}..."
@@ -42,24 +48,20 @@ echo "HF_TOKEN: ${HF_TOKEN:0:6}..."
 
 export WANDB_ENTITY=Research_00
 
-# 評価対象モデル (HFから model/ 以下にDL済み前提)
-#   uv run hf download llm-jp/llm-jp-4-8b-thinking --local-dir model/llm-jp-4-8b-thinking
-MODEL_PATH=model/llm-jp-4-8b-thinking
+# 評価対象モデル
+MODEL_PATH=model/Qwen3-8B
 
-#valのtemperature
-val_temperature=1.0
-#何回問題を解くか
+# valのtemperature (Qwen3 thinking mode 推奨: temperature=0.6, top_p=0.95)
+val_temperature=0.6
+# 何回問題を解くか
 pass_at_k=1
 
 project_name='0316_llm-jp-4-rl-eval'
-exp_name="val-aime-2024-2025-llmjp-4-8b-thinking-${val_temperature}_${pass_at_k}"
+exp_name="val-aime-2024-2025-qwen3-8b-${val_temperature}_${pass_at_k}"
 
-
-# 生成サンプルを jsonl として落とす先 (per-sample で目視確認用)
 VAL_DUMP_DIR="outputs/val/${exp_name}"
 mkdir -p "${VAL_DUMP_DIR}"
 
-# train_files は verl の要求で必須。val_only=True では使われないのでダミーに val と同じものを渡す
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files=data/AIME2024/test.parquet \
@@ -87,7 +89,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.n=1 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
-    actor_rollout_ref.rollout.temperature=1.0 \
+    actor_rollout_ref.rollout.temperature=${val_temperature} \
     actor_rollout_ref.rollout.val_kwargs.n="${pass_at_k}" \
     actor_rollout_ref.rollout.val_kwargs.temperature="${val_temperature}" \
     actor_rollout_ref.rollout.val_kwargs.top_p=0.95 \
