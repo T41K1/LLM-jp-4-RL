@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=160G
-#SBATCH --time=50:00:00
+#SBATCH --time=70:00:00
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 
@@ -44,15 +44,15 @@ export WANDB_ENTITY=Research_00
 
 # 評価対象モデル (HFから model/ 以下にDL済み前提)
 #   uv run hf download llm-jp/llm-jp-4-8b-thinking --local-dir model/llm-jp-4-8b-thinking
-MODEL_PATH=model/Qwen3-8B
+MODEL_PATH=model/llm-jp-4-8b-thinking
 
 #valのtemperature
-val_temperature=1.0
+val_temperature=0.6
 #何回問題を解くか
-pass_at_k=64
+pass_at_k=128
 
 project_name='0316_llm-jp-4-rl-eval'
-exp_name="val-aime-2024-2025-${MODEL_PATH}-${val_temperature}_${pass_at_k}"
+exp_name="val-aime-2024-2025-llmjp-4-8b-thinking-${val_temperature}_${pass_at_k}"
 
 
 # 生成サンプルを jsonl として落とす先 (per-sample で目視確認用)
@@ -83,7 +83,8 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.7 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.max_model_len=36864 \
     actor_rollout_ref.rollout.n=1 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \

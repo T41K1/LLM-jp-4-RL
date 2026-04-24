@@ -4,9 +4,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:8
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=320G
-#SBATCH --time=12:00:00
+#SBATCH --time=50:00:00
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 
@@ -44,16 +44,15 @@ export WANDB_ENTITY=Research_00
 
 # 評価対象モデル (HFから model/ 以下にDL済み前提)
 #   uv run hf download llm-jp/llm-jp-4-8b-thinking --local-dir model/llm-jp-4-8b-thinking
-MODEL_PATH=model/llm-jp-4-8b-thinking
+MODEL_PATH=model/llm-jp-4-32b-a3b-thinking
 
 #valのtemperature
-val_temperature=1.0
+val_temperature=0.6
 #何回問題を解くか
-pass_at_k=1
+pass_at_k=64
 
 project_name='0316_llm-jp-4-rl-eval'
-exp_name="val-aime-2024-2025-llmjp-4-8b-thinking-${val_temperature}_${pass_at_k}"
-
+exp_name="val-aime-2024-2025-${MODEL_PATH}-${val_temperature}_${pass_at_k}"
 
 # 生成サンプルを jsonl として落とす先 (per-sample で目視確認用)
 VAL_DUMP_DIR="outputs/val/${exp_name}"
@@ -99,7 +98,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.logger='["console","wandb"]' \
     trainer.project_name="${project_name}" \
     trainer.experiment_name="${exp_name}" \
-    trainer.n_gpus_per_node=8 \
+    trainer.n_gpus_per_node=4 \
     trainer.nnodes=1 \
     trainer.val_before_train=True \
     trainer.val_only=True \
