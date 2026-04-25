@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=160G
-#SBATCH --time=50:00:00
+#SBATCH --time=06:00:00
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 
@@ -30,6 +30,11 @@ module load cuda/12.2/12.2.2 2>/dev/null || true
 unset CUDA_VISIBLE_DEVICES
 unset ROCR_VISIBLE_DEVICES   # SLURMが自動設定する場合あり。verl workerがCUDAと衝突検知するのを防ぐ
 
+# Ray の残骸クラスタ情報をクリア (他ジョブの Ray に接続してしまう事故を防ぐ)
+unset RAY_ADDRESS
+export RAY_TMPDIR=/tmp/ray_${SLURM_JOB_ID:-$$}
+mkdir -p "${RAY_TMPDIR}"
+
 export VLLM_USE_V1=1
 export RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
 source .venv/bin/activate
@@ -46,12 +51,14 @@ export WANDB_ENTITY=Research_00
 #   uv run hf download llm-jp/llm-jp-4-8b-thinking --local-dir model/llm-jp-4-8b-thinking
 MODEL_PATH=model/Qwen3-8B
 
-#valのtemperature
-val_temperature=1.0
+#valのtemperature (第1引数で上書き可、未指定なら1.0)
+#   例: sbatch exp/eval/Qwen3-val_aime_2024_2025.sh 0.6
+val_temperature="${1:-1.0}"
+shift || true
 #何回問題を解くか
-pass_at_k=64
+pass_at_k=1
 
-project_name='0316_llm-jp-4-rl-eval'
+project_name='0316_contamination-temperature'
 exp_name="val-aime-2024-2025-${MODEL_PATH}-${val_temperature}_${pass_at_k}"
 
 

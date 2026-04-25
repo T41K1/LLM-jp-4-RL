@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=0316_llmjp4-eval-AIME24,25
+#SBATCH --job-name=0316_llmjp4-eval-AIME24,25-32b
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:8
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=32
 #SBATCH --mem=320G
-#SBATCH --time=50:00:00
+#SBATCH --time=80:00:00
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 
@@ -32,6 +32,7 @@ unset ROCR_VISIBLE_DEVICES   # SLURMが自動設定する場合あり。verl wor
 
 export VLLM_USE_V1=1
 export RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 source .venv/bin/activate
 
 set -a          # 以降の source で定義された変数を自動 export
@@ -49,7 +50,7 @@ MODEL_PATH=model/llm-jp-4-32b-a3b-thinking
 #valのtemperature
 val_temperature=0.6
 #何回問題を解くか
-pass_at_k=64
+pass_at_k=128
 
 project_name='0316_llm-jp-4-rl-eval'
 exp_name="val-aime-2024-2025-${MODEL_PATH}-${val_temperature}_${pass_at_k}"
@@ -80,9 +81,10 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=4 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.7 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.max_model_len=36864 \
     actor_rollout_ref.rollout.n=1 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
@@ -98,7 +100,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.logger='["console","wandb"]' \
     trainer.project_name="${project_name}" \
     trainer.experiment_name="${exp_name}" \
-    trainer.n_gpus_per_node=4 \
+    trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.val_before_train=True \
     trainer.val_only=True \
