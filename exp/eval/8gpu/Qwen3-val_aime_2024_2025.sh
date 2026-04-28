@@ -3,10 +3,10 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:4
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=160G
-#SBATCH --time=15:00:00
+#SBATCH --gres=gpu:8
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=320G
+#SBATCH --time=06:00:00
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 
@@ -30,6 +30,11 @@ module load cuda/12.2/12.2.2 2>/dev/null || true
 unset CUDA_VISIBLE_DEVICES
 unset ROCR_VISIBLE_DEVICES   # SLURMが自動設定する場合あり。verl workerがCUDAと衝突検知するのを防ぐ
 
+# Ray の残骸クラスタ情報をクリア (他ジョブの Ray に接続してしまう事故を防ぐ)
+unset RAY_ADDRESS
+export RAY_TMPDIR=/tmp/ray_${SLURM_JOB_ID:-$$}
+mkdir -p "${RAY_TMPDIR}"
+
 export VLLM_USE_V1=1
 export RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
 source .venv/bin/activate
@@ -44,15 +49,17 @@ export WANDB_ENTITY=Research_00
 
 # 評価対象モデル (HFから model/ 以下にDL済み前提)
 #   uv run hf download llm-jp/llm-jp-4-8b-thinking --local-dir model/llm-jp-4-8b-thinking
-MODEL_PATH=model/llm-jp-4-8b-thinking
+MODEL_PATH=model/Qwen3-8B
 
-#valのtemperature
-val_temperature=0.6
+#valのtemperature (第1引数で上書き可、未指定なら1.0)
+#   例: sbatch exp/eval/Qwen3-val_aime_2024_2025.sh 0.6
+val_temperature="${1:-1.0}"
+shift || true
 #何回問題を解くか
-pass_at_k=32
+pass_at_k=1
 
-project_name='0316_llm-jp-4-rl-eval'
-exp_name="val-aime-2024-2025-llmjp-4-8b-thinking-${val_temperature}_${pass_at_k}"
+project_name='0316_contamination-temperature'
+exp_name="val-aime-2024-2025-${MODEL_PATH}-${val_temperature}_${pass_at_k}"
 
 
 # 生成サンプルを jsonl として落とす先 (per-sample で目視確認用)
@@ -83,7 +90,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.7 \
     actor_rollout_ref.rollout.n=1 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
@@ -99,7 +106,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.logger='["console","wandb"]' \
     trainer.project_name="${project_name}" \
     trainer.experiment_name="${exp_name}" \
-    trainer.n_gpus_per_node=4 \
+    trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.val_before_train=True \
     trainer.val_only=True \
