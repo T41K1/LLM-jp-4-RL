@@ -16,7 +16,8 @@ data/
 outputs/
 
 checkpoints/
-deps/
+deps/*
+!deps/verl
 .tmp/
 
 .claude/    

@@ -32,8 +32,12 @@ source .venv/bin/activate
 source ./.env
 echo "WANDB_API_KEY: ${WANDB_API_KEY:0:6}..."
 
+
+#モデル名の変更
 #MODEL_PATH=/groups/gcg51557/experiments/0213_v4-8b/tasks/v4-8b-decay3m/checkpoints_hf/iter_3000000
 MODEL_PATH=/groups/gcg51557/experiments/0309_llmjp4_instruct5/checkpoints/nemo_to_hf/sft-1960947055
+
+
 
 project_name='0316_llm-jp-4-rl'
 exp_name='llmjp4-grpo-exp03-Phase1-Instruct-Dev-Olmo3-Math'
