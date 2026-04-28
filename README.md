@@ -101,6 +101,17 @@ qsub exp/step1/run_qwen3-8b.sh
 | `VLLM_USE_V1` | `1` | vLLM v1 エンジンを使用 |
 | `RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO` | `0` | Ray が GPU 可視性を上書きするのを防止 |
 
+### Step 3: LLM-JP v4 8B Instruct で OLMo3 流の math GRPO
+
+`MathVerifier` (`rewards/math_reward.py`) を使った GRPO 学習。学習データは `data/Dolci-Think-RL-math-verl/`、検証データは `data/AIME2024/` を使用します。
+
+```bash
+# ABCI で PBS ジョブとして投入（1ノード・8GPU、walltime 50h）
+qsub exp/step3/run_llmjp-4-8b-instruct-dev_phase1_olomo3_math.sh
+```
+
+スクリプト先頭の `MODEL_PATH` をローカルの checkpoint に書き換えてから投入してください。後継版 `..._v2.sh` も同ディレクトリにあります。
+
 ## verl 改造のワークフロー
 
 `deps/verl/` は独立した git リポジトリ (submodule) で、`origin = T41K1/LLM-jp-4-verl`、`upstream = volcengine/verl` を指しています。改造は fork 側に push し、親リポは「どの commit を使っているか」を pointer で記録する運用です。
