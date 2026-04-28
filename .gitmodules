@@ -1,0 +1,3 @@
+[submodule "deps/verl"]
+	path = deps/verl
+	url = https://github.com/T41K1/LLM-jp-4-verl.git
