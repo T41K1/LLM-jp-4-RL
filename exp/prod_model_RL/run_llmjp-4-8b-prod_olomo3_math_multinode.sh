@@ -35,27 +35,29 @@ GPUS_PER_NODE=8
 NODES=($(cat $PBS_NODEFILE | sort -u))
 NNODES=${#NODES[@]}
 HEAD_NODE=${NODES[0]}
-HEAD_IP=$(ssh ${HEAD_NODE} hostname -i | awk '{print $1}')
+# ジョブのヘッドノード（自分自身）のIPを取得
+HEAD_IP=$(hostname -i | awk '{print $1}')
 RAY_PORT=6379
 
 echo "[INFO] NNODES=${NNODES}, HEAD=${HEAD_NODE} (${HEAD_IP}), WORKERS=${NODES[*]:1}"
 
 # --- 既存Rayプロセスを掃除 ---
-for node in "${NODES[@]}"; do
-    ssh ${node} "ray stop --force 2>/dev/null; rm -rf /tmp/ray 2>/dev/null" &
+ray stop --force 2>/dev/null || true
+rm -rf /tmp/ray 2>/dev/null || true
+for i in $(seq 1 $((NNODES - 1))); do
+    pbsdsh -n ${i} -- bash -c "ray stop --force 2>/dev/null; rm -rf /tmp/ray 2>/dev/null" &
 done
 wait
 sleep 2
 
 # --- ヘッドノードでRay起動 ---
-ssh ${HEAD_NODE} "cd ${PBS_O_WORKDIR} && source .venv/bin/activate && \
-    ray start --head --port=${RAY_PORT} --num-gpus=${GPUS_PER_NODE}" &
-sleep 10
+ray start --head --port=${RAY_PORT} --num-gpus=${GPUS_PER_NODE}
+sleep 5
 
 # --- ワーカーノードをRayクラスタに接続 ---
-for node in "${NODES[@]:1}"; do
-    echo "[INFO] Starting Ray worker on ${node}..."
-    ssh ${node} "cd ${PBS_O_WORKDIR} && source .venv/bin/activate && \
+for i in $(seq 1 $((NNODES - 1))); do
+    echo "[INFO] Starting Ray worker on vnode ${i}..."
+    pbsdsh -n ${i} -- bash -c "cd ${PBS_O_WORKDIR} && source .venv/bin/activate && \
         ray start --address=${HEAD_IP}:${RAY_PORT} --num-gpus=${GPUS_PER_NODE}" &
     sleep 5
 done
@@ -135,8 +137,9 @@ python3 -m verl.trainer.main_ppo \
 
 # --- 後片付け ---
 echo "[INFO] Training finished. Stopping Ray cluster..."
-for node in "${NODES[@]}"; do
-    ssh ${node} "ray stop --force 2>/dev/null" &
+ray stop --force 2>/dev/null || true
+for i in $(seq 1 $((NNODES - 1))); do
+    pbsdsh -n ${i} -- bash -c "ray stop --force 2>/dev/null" &
 done
 wait
 echo "[INFO] Done."
