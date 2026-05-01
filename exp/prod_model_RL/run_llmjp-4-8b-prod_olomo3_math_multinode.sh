@@ -41,11 +41,14 @@ RAY_PORT=6379
 
 echo "[INFO] NNODES=${NNODES}, HEAD=${HEAD_NODE} (${HEAD_IP}), WORKERS=${NODES[*]:1}"
 
+# ワーカーノードで実行する共通セットアップ
+WORKER_SETUP="source /etc/profile.d/modules.sh && module reset && module load cuda/12.2/12.2.2 && unset CUDA_VISIBLE_DEVICES && cd ${PBS_O_WORKDIR} && source .venv/bin/activate"
+
 # --- 既存Rayプロセスを掃除 ---
 ray stop --force 2>/dev/null || true
 rm -rf /tmp/ray 2>/dev/null || true
 for i in $(seq 1 $((NNODES - 1))); do
-    pbsdsh -n ${i} -- bash -c "ray stop --force 2>/dev/null; rm -rf /tmp/ray 2>/dev/null" &
+    pbsdsh -n ${i} -- bash -c "${WORKER_SETUP} && ray stop --force 2>/dev/null; rm -rf /tmp/ray 2>/dev/null" &
 done
 wait
 sleep 2
@@ -57,7 +60,7 @@ sleep 5
 # --- ワーカーノードをRayクラスタに接続 ---
 for i in $(seq 1 $((NNODES - 1))); do
     echo "[INFO] Starting Ray worker on vnode ${i}..."
-    pbsdsh -n ${i} -- bash -c "cd ${PBS_O_WORKDIR} && source .venv/bin/activate && \
+    pbsdsh -n ${i} -- bash -c "${WORKER_SETUP} && \
         ray start --address=${HEAD_IP}:${RAY_PORT} --num-gpus=${GPUS_PER_NODE}" &
     sleep 5
 done
@@ -65,15 +68,7 @@ wait
 
 # --- Rayクラスタの接続確認 ---
 export RAY_ADDRESS="${HEAD_IP}:${RAY_PORT}"
-python3 -c "
-import ray, json
-ray.init(address='${HEAD_IP}:${RAY_PORT}')
-nodes = ray.nodes()
-print('[INFO] Ray cluster nodes:', len(nodes))
-for n in nodes:
-    print(f'  - {n[\"NodeManagerHostname\"]}: alive={n[\"Alive\"]}, gpus={n[\"Resources\"].get(\"GPU\", 0)}')
-ray.shutdown()
-"
+ray status
 
 # --- 学習設定 ---
 MODEL_PATH=model/llm-jp-4-8b-thinking
@@ -139,7 +134,7 @@ python3 -m verl.trainer.main_ppo \
 echo "[INFO] Training finished. Stopping Ray cluster..."
 ray stop --force 2>/dev/null || true
 for i in $(seq 1 $((NNODES - 1))); do
-    pbsdsh -n ${i} -- bash -c "ray stop --force 2>/dev/null" &
+    pbsdsh -n ${i} -- bash -c "${WORKER_SETUP} && ray stop --force 2>/dev/null" &
 done
 wait
 echo "[INFO] Done."
