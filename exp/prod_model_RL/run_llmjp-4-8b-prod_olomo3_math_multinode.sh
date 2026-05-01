@@ -93,7 +93,7 @@ mkdir -p "${VAL_DUMP_DIR}"
 
 # --- 学習実行 ---
 python3 -m verl.trainer.main_ppo \
-    ray_kwargs.ray_init.address="${HEAD_IP}:${RAY_PORT}" \
+    +ray_kwargs.ray_init.address="${HEAD_IP}:${RAY_PORT}" \
     algorithm.adv_estimator=grpo \
     data.train_files=data/Dolci-Think-RL-7B-math/train.parquet \
     data.val_files='[data/AIME2024/test.parquet,data/AIME2025/test.parquet]' \
