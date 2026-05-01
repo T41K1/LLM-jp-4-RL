@@ -70,16 +70,6 @@ wait
 export RAY_ADDRESS="${HEAD_IP}:${RAY_PORT}"
 sleep 10
 ray status
-python3 -c "
-import ray
-ray.init(address='auto')
-print('[DEBUG] nodes:', ray.nodes())
-print('[DEBUG] available_resources:', ray.available_resources())
-print('[DEBUG] cluster_resources:', ray.cluster_resources())
-import ray._private.state
-print('[DEBUG] available_resources_per_node:', ray._private.state.available_resources_per_node())
-ray.shutdown()
-"
 
 # --- 学習設定 ---
 MODEL_PATH=model/llm-jp-4-8b-thinking
