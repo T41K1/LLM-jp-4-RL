@@ -3,7 +3,7 @@
 #PBS -q rt_HF
 #PBS -q R9920261000
 #PBS -N 0316_llm-jp-4-RL-multinode
-#PBS -l select=2
+#PBS -l select=4
 #PBS -l walltime=500:00:00
 #PBS -j oe
 #PBS -o logs/
@@ -61,6 +61,7 @@ mkdir -p "${VAL_DUMP_DIR}"
 
 # --- 学習実行 ---
 python3 -m verl.trainer.main_ppo \
+    trainer.val_metrics.pass_at_k=true \
     +ray_kwargs.ray_init.address="${RAY_ADDRESS}" \
     algorithm.adv_estimator=grpo \
     data.train_files=data/Dolci-Think-RL-7B-math/train.parquet \

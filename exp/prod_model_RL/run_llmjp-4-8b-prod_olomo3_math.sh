@@ -53,6 +53,7 @@ mkdir -p "${VAL_DUMP_DIR}"
 
 
 python3 -m verl.trainer.main_ppo \
+    trainer.val_metrics.pass_at_k=true \
     algorithm.adv_estimator=grpo \
     data.train_files=data/Dolci-Think-RL-7B-math/train.parquet \
     data.val_files='[data/AIME2024/test.parquet,data/AIME2025/test.parquet]' \
