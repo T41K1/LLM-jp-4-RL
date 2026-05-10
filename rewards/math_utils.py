@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import sympy
+from lark.exceptions import LarkError
 from sympy.parsing.latex import parse_latex
 
 eval_logger = logging.getLogger("math_utils")
@@ -198,7 +199,7 @@ def is_equiv(x1: str, x2: str) -> bool:
             try:
                 parsed_x1 = parse_latex(x1, backend="lark")
                 parsed_x2 = parse_latex(x2, backend="lark")
-            except (sympy.parsing.latex.errors.LaTeXParsingError, sympy.SympifyError, TypeError):
+            except (LarkError, sympy.parsing.latex.errors.LaTeXParsingError, sympy.SympifyError, TypeError):
                 eval_logger.debug(f"couldn't parse one of {x1} or {x2}")
                 return False
 
