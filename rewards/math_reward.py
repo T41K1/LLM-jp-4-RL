@@ -13,6 +13,9 @@ from rewards.math_utils import MathVerifier
 _verifier = MathVerifier()
 
 
+# 今後math以外のdomainに対してもreward functionを作成する
+
+
 def compute_score(
     data_source: str,
     solution_str: str,
@@ -33,6 +36,6 @@ def compute_score(
     """
     result = _verifier([], solution_str, ground_truth)
     matched = result.score > 0
-    #scoreに対して10倍をするのはOlmo3の設定値を踏襲
+    # scoreに対して10倍をするのはOlmo3の設定値を踏襲
     score = result.score  # 1.0 or 0.0
-    return {"score": score * 10.0, "acc": matched, "pred": solution_str}
+    return {"score": score * 10.0, "acc": matched, "pred": result.pred or solution_str}

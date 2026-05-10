@@ -1,12 +1,17 @@
+from __future__ import annotations
+
 import asyncio
+import contextlib
 import logging
 import re
 import signal
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
 import sympy
+from sympy.parsing.latex import parse_latex
 
 eval_logger = logging.getLogger("math_utils")
 
@@ -176,44 +181,11 @@ class timeout:
     def __exit__(self, type, value, traceback):
         signal.alarm(0)
 
-def _latex_to_sympy_str(s: str) -> str:
-    """Convert a normalized LaTeX string to a sympy-parseable expression."""
-    s = s.strip().strip("$")
-    # \frac{a}{b} -> (a)/(b)
-    s = re.sub(r"\\frac\{([^}]*)\}\{([^}]*)\}", r"(\1)/(\2)", s)
-    # \sqrt{a} -> sqrt(a)
-    s = re.sub(r"\\sqrt\{([^}]*)\}", r"sqrt(\1)", s)
-    # \sqrt[n]{a} -> (a)**(1/(n))
-    s = re.sub(r"\\sqrt\[([^\]]*)\]\{([^}]*)\}", r"(\2)**(1/(\1))", s)
-    # x^{n} -> x**(n)
-    s = re.sub(r"\^{([^}]*)}", r"**(\1)", s)
-    # x^n (single char) -> x**n
-    s = re.sub(r"\^([0-9a-zA-Z])", r"**\1", s)
-    # \cdot -> *
-    s = s.replace("\\cdot", "*")
-    # \times -> *
-    s = s.replace("\\times", "*")
-    # \div -> /
-    s = s.replace("\\div", "/")
-    # \pi -> pi
-    s = s.replace("\\pi", "pi")
-    # \infty -> oo
-    s = s.replace("\\infty", "oo")
-    # Remove remaining backslash commands (e.g. \left, \right)
-    s = re.sub(r"\\[a-zA-Z]+", "", s)
-    # Remove braces
-    s = s.replace("{", "(").replace("}", ")")
-    # Insert implicit multiplication: "2sqrt" -> "2*sqrt", "3pi" -> "3*pi", "2(" -> "2*("
-    s = re.sub(r"(\d)([a-zA-Z(])", r"\1*\2", s)
-    s = re.sub(r"(\))(\d)", r"\1*\2", s)
-    s = re.sub(r"(\))([a-zA-Z(])", r"\1*\2", s)
-    return s
 
-
-def _safe_sympify(s: str):
-    """Try to parse a LaTeX string into a sympy expression without antlr4."""
-    expr_str = _latex_to_sympy_str(s)
-    return sympy.sympify(expr_str, evaluate=True)
+def _equiv_timeout(seconds: int):
+    if threading.current_thread() is threading.main_thread():
+        return timeout(seconds=seconds)
+    return contextlib.nullcontext()
 
 
 # sympyで2つの式をパースし、差をsimplifyして0になるか判定（5秒タイムアウト付き）
@@ -222,11 +194,11 @@ def is_equiv(x1: str, x2: str) -> bool:
     x1 and x2 are normalized latex string
     """
     try:
-        with timeout(seconds=5):
+        with _equiv_timeout(seconds=5):
             try:
-                parsed_x1 = _safe_sympify(x1)
-                parsed_x2 = _safe_sympify(x2)
-            except (sympy.SympifyError, SyntaxError, TypeError, ValueError):
+                parsed_x1 = parse_latex(x1, backend="lark")
+                parsed_x2 = parse_latex(x2, backend="lark")
+            except (sympy.parsing.latex.errors.LaTeXParsingError, sympy.SympifyError, TypeError):
                 eval_logger.debug(f"couldn't parse one of {x1} or {x2}")
                 return False
 
@@ -243,6 +215,9 @@ def is_equiv(x1: str, x2: str) -> bool:
     except TimeoutError:
         eval_logger.debug(f"Timed out comparing {x1} and {x2}")
         return False
+    except ImportError as e:
+        eval_logger.error(e)
+        raise
     except Exception as e:
         eval_logger.debug(f"Failed comparing {x1} and {x2} with {e}")
         return False
@@ -412,6 +387,8 @@ class VerifierConfig:
 class VerificationResult:
     """Result of a verification, with a score between 0.0 and 1.0."""
     score: float = 0.0
+    pred: str | None = None
+    candidates: list[str] = field(default_factory=list)
 
 
 class VerifierFunction(ABC):
@@ -442,6 +419,72 @@ class VerifierFunction(ABC):
         return f"{self.__class__.__name__}(name={self.name}, weight={self.weight})"
 
 
+def _append_candidate(candidates: list[str], answer: str | None) -> None:
+    if answer is not None and answer not in candidates:
+        candidates.append(answer)
+
+
+def extract_math_answers(prediction: str) -> list[str]:
+    """Extract final-answer candidates using the Open Instruct MathVerifier order."""
+    raw_answer = prediction or ""
+    candidates: list[str] = []
+
+    boxed_answer = last_boxed_only_string(raw_answer)
+    if boxed_answer is not None:
+        try:
+            boxed_answer = remove_boxed(boxed_answer)
+        except AssertionError:
+            boxed_answer = None
+    _append_candidate(candidates, boxed_answer)
+
+    minerva_answer = normalize_final_answer(get_unnormalized_answer(raw_answer))
+    if minerva_answer is not None and minerva_answer != "[invalidanswer]":
+        _append_candidate(candidates, minerva_answer)
+
+    if not candidates:
+        dollars = [m.start() for m in re.finditer(r"\$", raw_answer)]
+        if len(dollars) > 1:
+            answer = normalize_final_answer(raw_answer[dollars[-2] + 1 : dollars[-1]])
+            _append_candidate(candidates, answer)
+
+    if not candidates:
+        _append_candidate(candidates, normalize_final_answer(raw_answer))
+        _append_candidate(candidates, raw_answer)
+
+    return candidates
+
+
+def extract_strict_math_answers(prediction: str) -> list[str]:
+    """Extract final-answer candidates for strict Minerva-style verification."""
+    raw_answer = prediction or ""
+    candidates: list[str] = []
+
+    minerva_answer = normalize_final_answer(get_unnormalized_answer(raw_answer))
+    if minerva_answer is not None and minerva_answer != "[invalidanswer]":
+        _append_candidate(candidates, minerva_answer)
+    if not candidates:
+        _append_candidate(candidates, normalize_final_answer(raw_answer))
+
+    return candidates
+
+
+def verify_math_candidates(candidates: list[str], label: str) -> VerificationResult:
+    """Compare extracted candidates to the ground truth."""
+    label = str(label)
+    fallback_pred = candidates[0] if candidates else None
+
+    for answer in candidates:
+        if is_equiv(answer, label) or hendrycks_is_equiv(answer, label):
+            return VerificationResult(score=1.0, pred=answer, candidates=candidates)
+
+    return VerificationResult(score=0.0, pred=fallback_pred, candidates=candidates)
+
+
+def verify_math_prediction(prediction: str, label: str) -> VerificationResult:
+    """Extract and verify a math answer from a model prediction."""
+    return verify_math_candidates(extract_math_answers(prediction), label)
+
+
 class MathVerifier(VerifierFunction):
     """
     Verifier for math problems.
@@ -461,42 +504,7 @@ class MathVerifier(VerifierFunction):
         query: str | None = None,
         rollout_state: dict | None = None,
     ) -> VerificationResult:
-        raw_answer = prediction
-        all_answers = []
-
-        # Attempt extraction from \boxed{}.
-        boxed_answer = last_boxed_only_string(raw_answer)
-        if boxed_answer is not None:
-            try:
-                boxed_answer = remove_boxed(boxed_answer)
-            except (AssertionError, AssertionError):
-                boxed_answer = None
-        if boxed_answer is not None:
-            all_answers.append(boxed_answer)
-
-        # Attempt extraction via Minerva format.
-        minerva_answer = normalize_final_answer(get_unnormalized_answer(raw_answer))
-        if minerva_answer is not None and minerva_answer != "[invalidanswer]":
-            all_answers.append(minerva_answer)
-
-        # Attempt extraction from the last LaTeX-formatted answer.
-        if not all_answers:
-            dollars = [m.start() for m in re.finditer(r"\$", raw_answer)]
-            if len(dollars) > 1:
-                answer = normalize_final_answer(raw_answer[dollars[-2] + 1 : dollars[-1]])
-                all_answers.append(answer)
-
-        # Fallback to the full output.
-        if not all_answers:
-            all_answers.append(normalize_final_answer(prediction))
-            # also provide original string in case normalization fails
-            all_answers.append(prediction)
-
-        # Compare each candidate answer to the ground truth.
-        for answer in all_answers:
-            if is_equiv(answer, label) or hendrycks_is_equiv(answer, label):
-                return VerificationResult(score=1.0)
-        return VerificationResult(score=0.0)
+        return verify_math_prediction(prediction, label)
 
 
 class StrictMathVerifier(VerifierFunction):
@@ -515,14 +523,4 @@ class StrictMathVerifier(VerifierFunction):
         query: str | None = None,
         rollout_state: dict | None = None,
     ) -> VerificationResult:
-        raw_answer = prediction
-        all_answers = []
-        minerva_answer = normalize_final_answer(get_unnormalized_answer(raw_answer))
-        if minerva_answer is not None and minerva_answer != "[invalidanswer]":
-            all_answers.append(minerva_answer)
-        if not all_answers:
-            all_answers.append(normalize_final_answer(prediction))
-        for answer in all_answers:
-            if is_equiv(answer, label) or hendrycks_is_equiv(answer, label):
-                return VerificationResult(score=1.0)
-        return VerificationResult(score=0.0)
+        return verify_math_candidates(extract_strict_math_answers(prediction), label)
