@@ -31,7 +31,9 @@ module load cuda/12.2/12.2.2
 unset CUDA_VISIBLE_DEVICES
 
 if [[ -f ./.env ]]; then
+    set +x
     source ./.env
+    set -x
 fi
 
 REPO_DIR="$(pwd)"
@@ -64,8 +66,6 @@ TRAIN_MICRO_BATCH_SIZE="${TRAIN_MICRO_BATCH_SIZE:-1}"
 VAL_GLOBAL_BATCH_SIZE="${VAL_GLOBAL_BATCH_SIZE:-8}"
 VAL_MICRO_BATCH_SIZE="${VAL_MICRO_BATCH_SIZE:-1}"
 
-
-OLMo3_Loss="${DPO_Loss:True}"
 LR="${LR:-8.0e-8}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-0.1}"
 MAX_NUM_EPOCHS="${MAX_NUM_EPOCHS:-1}"
@@ -102,7 +102,7 @@ BEGIN {
 VAL_PERIOD="${VAL_PERIOD:-25}"
 VAL_BATCHES="${VAL_BATCHES:-8}"
 SAVE_PERIOD="${SAVE_PERIOD:-50}"
-OLMO3_LOSS="${OLMO3_LOSS:-${OLMo3_Loss:-false}}"
+OLMO3_LOSS="${OLMO3_LOSS:-false}"
 case "${OLMO3_LOSS}" in
     true|True|TRUE|1|yes|Yes|YES)
         KL_PENALTY="${KL_PENALTY:-5}"
