@@ -112,6 +112,11 @@ qsub exp/step3/run_llmjp-4-8b-instruct-dev_phase1_olomo3_math.sh
 
 スクリプト先頭の `MODEL_PATH` をローカルの checkpoint に書き換えてから投入してください。後継版 `..._v2.sh` も同ディレクトリにあります。
 
+### DPO: NeMo-RL を使った preference tuning
+
+NeMo-RL `v0.5.0` を親 repo の `uv --extra nemo-rl` 環境から呼び出すスクリプトを `exp/dpo/run_llmjp-4-8b_nemo-rl_dpo.sh` に用意しています。DPO データの作り方、NeMo-RL の clone 方針、投入例は `docs/nemo-rl-dpo.md` を参照してください。
+`allenai/Dolci-Think-DPO-7B` は `data_load/dolci_think_dpo_7b.py` で NeMo-RL 用 JSONL に変換し、`exp/dpo/run_llmjp-4-8b_nemo-rl_dolci-think-dpo-7b.sh` から投入できます。
+
 ## verl 改造のワークフロー
 
 `deps/verl/` は独立した git リポジトリ (submodule) で、`origin = T41K1/LLM-jp-4-verl`、`upstream = volcengine/verl` を指しています。改造は fork 側に push し、親リポは「どの commit を使っているか」を pointer で記録する運用です。
