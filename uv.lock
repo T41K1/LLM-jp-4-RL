@@ -2879,7 +2879,7 @@ requires-dist = [
     { name = "pytest-rerunfailures", marker = "extra == 'test'" },
     { name = "qwen-vl-utils", marker = "extra == 'geo'" },
     { name = "ray", extras = ["default"], specifier = ">=2.41.0" },
-    { name = "sglang", extras = ["openai", "srt"], marker = "extra == 'sglang'", specifier = "==0.5.6" },
+    { name = "sglang", extras = ["openai", "srt"], marker = "extra == 'sglang'", specifier = "==0.5.8" },
     { name = "tensorboard" },
     { name = "tensordict", specifier = ">=0.8.0,!=0.9.0,<=0.10.0" },
     { name = "tensordict", marker = "extra == 'sglang'", specifier = ">=0.8.0,!=0.9.0,<=0.10.0" },
@@ -2888,13 +2888,13 @@ requires-dist = [
     { name = "torch", marker = "extra == 'sglang'", specifier = "==2.9.1" },
     { name = "torchdata" },
     { name = "torchvision", marker = "extra == 'geo'" },
-    { name = "transferqueue", marker = "extra == 'transferqueue'", specifier = "==0.1.5" },
+    { name = "transferqueue", marker = "extra == 'transferqueue'", specifier = "==0.1.6" },
     { name = "transformers" },
     { name = "trl", marker = "extra == 'trl'", specifier = "<=0.9.6" },
     { name = "vllm", marker = "extra == 'vllm'", specifier = ">=0.8.5,<=0.12.0" },
     { name = "wandb" },
 ]
-provides-extras = ["test", "prime", "geo", "gpu", "math", "vllm", "sglang", "trl", "mcore", "transferqueue", "trtllm"]
+provides-extras = ["test", "prime", "geo", "gpu", "math", "vllm", "sglang", "trl", "mcore", "trtllm", "transferqueue"]
 
 [[package]]
 name = "virtualenv"
