@@ -1,6 +1,6 @@
 #!/bin/sh
 #PBS -P gcg51557
-#PBS -q rt_HF
+#PBS -v RTYPE=rt_HF
 #PBS -q R9920261000  
 #PBS -N 0316_llm-jp-4-RL
 #PBS -l select=1
