@@ -3,7 +3,7 @@
 #PBS -v RTYPE=rt_HF
 #PBS -q R9920261000
 #PBS -N 0316_llm-jp-4-RL-multinode
-#PBS -l select=8
+#PBS -l select=4
 #PBS -l walltime=500:00:00
 #PBS -j oe
 #PBS -o logs/
@@ -54,7 +54,7 @@ setup_ray_cluster
 MODEL_PATH=model/llm-jp-4-8b-thinking
 
 project_name='0316_llm-jp-4-RL'
-exp_name="${MODEL_PATH}-GRPO-Olmo3-Math-${NNODES}node-$(date +%Y%m%d)"
+exp_name="${EXP_NAME:-${MODEL_PATH##*/}-GRPO-Olmo3-Math-${NNODES}node-$(date +%Y%m%d)}"
 
 VAL_DUMP_DIR="outputs/val/${exp_name}"
 mkdir -p "${VAL_DUMP_DIR}"
@@ -65,6 +65,7 @@ N=${MY_N}
 NUM_PROMPTS=${NUM_PROMPTS}
 ENT=1e-3 
 LR=1e-6
+MINI_BATCH_SIZE=${MINI_BATCH_SIZE}
 BS=$((${N} * ${NUM_PROMPTS}))
 MBS=$((${N} * ${MINI_BATCH_SIZE}))
 
@@ -95,7 +96,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
     actor_rollout_ref.rollout.n=${N} \
