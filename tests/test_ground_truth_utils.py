@@ -7,6 +7,7 @@ or via discovery:
 """
 
 import dataclasses
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
@@ -16,6 +17,12 @@ from rewards.ground_truth_utils import (
     VerifierConfig,
     VerifierFunction,
 )
+
+
+# Module-level so it is picklable for `forkserver` start method.
+def _hang_worker(x1, x2, result_queue):
+    """Simulated worker that blocks far past any reasonable test timeout."""
+    time.sleep(60)
 
 
 class VerificationResultTest(unittest.TestCase):
@@ -140,6 +147,41 @@ class MathVerifierRobustnessTest(unittest.TestCase):
         # NameError that bubbled out of MathVerifier.__call__.
         result = MathVerifier()([], "completely unparseable %%%", "42")
         self.assertEqual(result.score, 0.0)
+
+    def test_subprocess_kills_hanging_worker_within_timeout(self):
+        # Regression: previous run had a single compute_score call hang for
+        # 2326s because SIGALRM cannot interrupt sympy's C extensions. The
+        # subprocess-based timeout in is_equiv must hard-kill the worker.
+        from rewards import math_utils
+
+        original = math_utils._is_equiv_worker
+        math_utils._is_equiv_worker = _hang_worker
+        try:
+            start = time.monotonic()
+            result = math_utils.is_equiv("1", "1", timeout_sec=1)
+            elapsed = time.monotonic() - start
+        finally:
+            math_utils._is_equiv_worker = original
+
+        self.assertFalse(result)
+        # 1s timeout + up to 1s for SIGTERM grace + slack for forkserver/teardown.
+        self.assertLess(elapsed, 5.0)
+
+    def test_long_input_returns_fast_without_sympy(self):
+        # Regression: a previous training run had a single compute_score call
+        # take ~2326s because the fallback path passed the full prediction
+        # (thousands of tokens) to sympy.simplify, which can hang in C code
+        # even with SIGALRM set. The length cap in is_equiv must short-circuit
+        # before sympy is invoked.
+        import time
+
+        from rewards.math_utils import IS_EQUIV_MAX_LEN, is_equiv
+
+        huge = "\\frac{1}{2}" * (IS_EQUIV_MAX_LEN // 2)
+        self.assertGreater(len(huge), IS_EQUIV_MAX_LEN)
+        start = time.monotonic()
+        self.assertFalse(is_equiv(huge, "1/2"))
+        self.assertLess(time.monotonic() - start, 0.5)
 
     def test_verifier_runs_in_worker_thread(self):
         # Regression: math_utils.timeout used signal.SIGALRM unconditionally,

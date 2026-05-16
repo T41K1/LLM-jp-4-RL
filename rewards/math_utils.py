@@ -1,8 +1,11 @@
+import multiprocessing as mp
+import queue as _queue_mod
 import re
 import signal
 import threading
 
 import sympy
+from lark.exceptions import LarkError
 from sympy.parsing.latex import parse_latex
 
 
@@ -218,39 +221,91 @@ class timeout:
             signal.alarm(0)
 
 
-def is_equiv(x1: str, x2: str) -> bool:
-    """
-    x1 and x2 are normalized latex string
-    """
+# sympy.simplify can hang in C extensions on adversarial latex; SIGALRM is
+# unreliable (worker threads + native code). Cap inputs upfront. Real math
+# answers are short — 256 chars is well above any legitimate ground truth.
+IS_EQUIV_MAX_LEN = 256
+
+# is_equiv は子プロセスで実行し、規定時間で OS から強制終了する。
+# SIGALRM では C 拡張内に居る sympy を止められないため。
+#
+# start method は forkserver: verl の reward worker は asyncio + ThreadPoolExecutor
+# でマルチスレッドなので、直接 fork すると親のロック状態が子に中途半端に
+# コピーされてデッドロックする可能性がある (Python 3.12 で警告化済)。
+# forkserver は初回に1つだけシングルスレッドの中継プロセスを建て、そこから
+# 子を fork するため、マルチスレッド親からの fork 問題を回避できる。
+_IS_EQUIV_TIMEOUT_SEC = 5
+_MP_CTX = mp.get_context("forkserver")  # Linux 前提
+
+
+def _is_equiv_worker(x1: str, x2: str, result_queue) -> None:
+    """子プロセスで sympy 比較を実行し、結果を queue に詰める。"""
     try:
-        with timeout(seconds=5):
-            try:
-                parsed_x1 = parse_latex(x1,backend="lark")
-                parsed_x2 = parse_latex(x2,backend="lark")
-            except (sympy.parsing.latex.errors.LaTeXParsingError, sympy.SympifyError, TypeError):
-                eval_logger.debug(f"couldn't parse one of {x1} or {x2}")
-                return False
-
-            try:
-                diff = parsed_x1 - parsed_x2
-            except TypeError:
-                eval_logger.debug(f"couldn't subtract {x1} and {x2}")
-                return False
-
-            try:
-                return sympy.simplify(diff) == 0
-            except ValueError:
-                eval_logger.debug(f"Had some trouble simplifying when comparing {x1} and {x2}")
-                return False
-    except TimeoutError:
-        eval_logger.debug(f"Timed out comparing {x1} and {x2}")
-        return False
-    except ImportError as e:
-        eval_logger.error(e)
-        raise
+        parsed_x1 = parse_latex(x1, backend="lark")
+        parsed_x2 = parse_latex(x2, backend="lark")
+    except (
+        sympy.parsing.latex.errors.LaTeXParsingError,
+        sympy.SympifyError,
+        LarkError,
+        TypeError,
+    ):
+        result_queue.put(("ok", False))
+        return
+    try:
+        diff = parsed_x1 - parsed_x2
+    except TypeError:
+        result_queue.put(("ok", False))
+        return
+    try:
+        result_queue.put(("ok", bool(sympy.simplify(diff) == 0)))
+    except ValueError:
+        result_queue.put(("ok", False))
     except Exception as e:
-        eval_logger.debug(f"Failed comparing {x1} and {x2} with {e}")
+        result_queue.put(("err", repr(e)))
+
+
+def is_equiv(x1: str, x2: str, timeout_sec: int = _IS_EQUIV_TIMEOUT_SEC) -> bool:
+    """
+    x1 and x2 are normalized latex string.
+
+    sympy parse/simplify は子プロセスで実行し、`timeout_sec` で OS から強制終了する。
+    """
+    if x1 is None or x2 is None:
         return False
+    if len(x1) > IS_EQUIV_MAX_LEN or len(x2) > IS_EQUIV_MAX_LEN:
+        eval_logger.debug(
+            f"is_equiv: skipping sympy (len={len(x1)},{len(x2)} > {IS_EQUIV_MAX_LEN})"
+        )
+        return False
+
+    result_queue = _MP_CTX.Queue()
+    proc = _MP_CTX.Process(target=_is_equiv_worker, args=(x1, x2, result_queue))
+    proc.start()
+    proc.join(timeout=timeout_sec)
+
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(timeout=1)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
+        eval_logger.debug(
+            f"is_equiv: timed out after {timeout_sec}s comparing {x1!r} vs {x2!r}"
+        )
+        return False
+
+    try:
+        status, value = result_queue.get_nowait()
+    except _queue_mod.Empty:
+        eval_logger.debug(
+            f"is_equiv: worker exited without result (exitcode={proc.exitcode})"
+        )
+        return False
+
+    if status == "ok":
+        return value
+    eval_logger.debug(f"is_equiv: worker error {value}")
+    return False
 
 
 def strip_string(string):
