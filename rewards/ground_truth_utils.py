@@ -35,6 +35,7 @@ class VerificationResult:
     score: float
     cost: float = 0.0
     reasoning: str | None = None
+    pred: str | None = None
 
 
 @dataclasses.dataclass
@@ -197,5 +198,8 @@ class MathVerifier(VerifierFunction):
         # Compare each candidate answer to the ground truth.
         for answer in all_answers:
             if is_equiv(answer, label) or hendrycks_is_equiv(answer, label):
-                return VerificationResult(score=1.0)
-        return VerificationResult(score=0.0)
+                return VerificationResult(score=1.0, pred=answer)
+        return VerificationResult(
+            score=0.0,
+            pred=all_answers[0] if all_answers else None,
+        )

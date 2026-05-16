@@ -8,6 +8,7 @@ or via discovery:
 
 import dataclasses
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 
 from rewards.ground_truth_utils import (
     MathVerifier,
@@ -23,10 +24,11 @@ class VerificationResultTest(unittest.TestCase):
         self.assertEqual(result.score, 1.0)
         self.assertEqual(result.cost, 0.0)
         self.assertIsNone(result.reasoning)
+        self.assertIsNone(result.pred)
 
     def test_field_names(self):
         names = {f.name for f in dataclasses.fields(VerificationResult)}
-        self.assertEqual(names, {"score", "cost", "reasoning"})
+        self.assertEqual(names, {"score", "cost", "reasoning", "pred"})
 
 
 class VerifierConfigTest(unittest.TestCase):
@@ -68,12 +70,22 @@ class MathVerifierScoringTest(unittest.TestCase):
 
     # --- boxed extraction path -------------------------------------------------
     def test_boxed_with_space_extracts_integer(self):
-        # `last_boxed_only_string` only succeeds for the `\boxed ` (space) form,
-        # which is the dominant Minerva-trained format.
         self.assertEqual(self._score(r"\boxed 42$", "42"), 1.0)
 
     def test_boxed_with_space_wrong_answer_scores_zero(self):
         self.assertEqual(self._score(r"\boxed 41$", "42"), 0.0)
+
+    def test_boxed_brace_form_extracts_integer(self):
+        # Regression: last_boxed_only_string previously fell through and
+        # returned None for `\boxed{...}`, so this typical training output
+        # was silently scored 0.0 even when correct.
+        self.assertEqual(self._score(r"The answer is \boxed{42}.", "42"), 1.0)
+
+    def test_boxed_brace_form_handles_nested_braces(self):
+        self.assertEqual(
+            self._score(r"So the answer is \boxed{\frac{1}{2}}.", "1/2"),
+            1.0,
+        )
 
     # --- Minerva "Final Answer: ... I hope it is correct." path ---------------
     def test_minerva_format_correct(self):
@@ -117,6 +129,80 @@ class MathVerifierReturnTypeTest(unittest.TestCase):
         self.assertIsInstance(result, VerificationResult)
         self.assertEqual(result.cost, 0.0)
         self.assertIsNone(result.reasoning)
+
+
+class MathVerifierRobustnessTest(unittest.TestCase):
+    """Inputs / call-sites that previously crashed the verifier."""
+
+    def test_unparseable_prediction_does_not_raise(self):
+        # Regression: math_utils.is_equiv used to reference an undefined
+        # `eval_logger` in its exception path, turning a parse failure into a
+        # NameError that bubbled out of MathVerifier.__call__.
+        result = MathVerifier()([], "completely unparseable %%%", "42")
+        self.assertEqual(result.score, 0.0)
+
+    def test_verifier_runs_in_worker_thread(self):
+        # Regression: math_utils.timeout used signal.SIGALRM unconditionally,
+        # which raises ValueError outside the main thread. verl reward workers
+        # can call us off-thread, so the verifier must stay alive there.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            result = pool.submit(
+                MathVerifier(), [], r"The answer is \boxed{42}.", "42"
+            ).result()
+        self.assertEqual(result.score, 1.0)
+        self.assertEqual(result.pred, "42")
+
+
+class MathVerifierPredTest(unittest.TestCase):
+    """`pred` should expose the extracted answer used for scoring."""
+
+    def setUp(self):
+        self.verifier = MathVerifier()
+
+    def test_pred_on_match_is_extracted_boxed_value(self):
+        result = self.verifier([], r"\boxed 42$", "42")
+        self.assertEqual(result.score, 1.0)
+        self.assertEqual(result.pred, "42")
+
+    def test_pred_on_minerva_match_is_extracted_value(self):
+        prediction = "Final Answer: The final answer is 42. I hope it is correct."
+        result = self.verifier([], prediction, "42")
+        self.assertEqual(result.score, 1.0)
+        self.assertEqual(result.pred, "42")
+
+    def test_pred_on_mismatch_is_first_candidate(self):
+        prediction = "Final Answer: The final answer is 41. I hope it is correct."
+        result = self.verifier([], prediction, "42")
+        self.assertEqual(result.score, 0.0)
+        self.assertEqual(result.pred, "41")
+
+
+class MathRewardComputeScoreTest(unittest.TestCase):
+    """End-to-end check for the entry point verl calls during training."""
+
+    def test_compute_score_match(self):
+        from rewards.math_reward import compute_score
+
+        result = compute_score(
+            data_source="math",
+            solution_str=r"\boxed 42$",
+            ground_truth="42",
+        )
+        self.assertEqual(result["score"], 10.0)
+        self.assertTrue(result["acc"])
+        self.assertEqual(result["pred"], "42")
+
+    def test_compute_score_mismatch(self):
+        from rewards.math_reward import compute_score
+
+        result = compute_score(
+            data_source="math",
+            solution_str="Final Answer: The final answer is 41. I hope it is correct.",
+            ground_truth="42",
+        )
+        self.assertEqual(result["score"], 0.0)
+        self.assertFalse(result["acc"])
+        self.assertEqual(result["pred"], "41")
 
 
 if __name__ == "__main__":

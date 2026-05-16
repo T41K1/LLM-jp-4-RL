@@ -1,5 +1,6 @@
 import re
 import signal
+import threading
 
 import sympy
 from sympy.parsing.latex import parse_latex
@@ -8,6 +9,40 @@ from sympy.parsing.latex import parse_latex
 
 
 # reference code: https://github.com/allenai/open-instruct/blob/main/open_instruct/math_utils.py
+
+
+
+
+import logging
+
+
+def setup_logger(name: str | None = None, rank: int = 0) -> logging.Logger:
+    """Set up a logger with consistent formatting across the project.
+
+    This function configures logging.basicConfig with a standard format
+    that includes timestamp, level, filename, line number, and message.
+    It only configures basicConfig once to avoid overwriting existing config.
+
+    Args:
+        name: Logger name (typically __name__). If None, returns root logger.
+        rank: Process rank in distributed training. Only rank 0 logs INFO.
+
+    Returns:
+        Logger instance with the specified name
+    """
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=logging.INFO if rank == 0 else logging.WARNING,
+            format="%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+
+    return logging.getLogger(name)
+
+eval_logger = setup_logger('math_utils')
+
+
+
 
 
 #boxedの処理
@@ -19,6 +54,23 @@ def last_boxed_only_string(string: str) -> str | None:
         idx = string.rfind("\\fbox")
         if idx < 0:
             return None
+
+    i = idx
+    right_brace_idx = None
+    num_left_braces_open = 0
+    while i < len(string):
+        if string[i] == "{":
+            num_left_braces_open += 1
+        if string[i] == "}":
+            num_left_braces_open -= 1
+            if num_left_braces_open == 0:
+                right_brace_idx = i
+                break
+        i += 1
+
+    if right_brace_idx is None:
+        return None
+    return string[idx : right_brace_idx + 1]
 
 # boxedの中から答えを取る
 def remove_boxed(s: str) -> str:
@@ -149,16 +201,21 @@ class timeout:
     def __init__(self, seconds=1, error_message="Timeout"):
         self.seconds = seconds
         self.error_message = error_message
+        # signal.signal / signal.alarm はメインスレッド以外では ValueError を投げる。
+        # verl の reward worker は非メインスレッドで動く場合があるので、その時は no-op。
+        self._use_signal = threading.current_thread() is threading.main_thread()
 
     def handle_timeout(self, signum, frame):
         raise TimeoutError(self.error_message)
 
     def __enter__(self):
-        signal.signal(signal.SIGALRM, self.handle_timeout)
-        signal.alarm(self.seconds)
+        if self._use_signal:
+            signal.signal(signal.SIGALRM, self.handle_timeout)
+            signal.alarm(self.seconds)
 
     def __exit__(self, type, value, traceback):
-        signal.alarm(0)
+        if self._use_signal:
+            signal.alarm(0)
 
 
 def is_equiv(x1: str, x2: str) -> bool:
