@@ -98,7 +98,7 @@ EVAL_RTYPE="${EVAL_RTYPE:-rt_HG}"
 EVAL_SELECT="${EVAL_SELECT:-1}"
 EVAL_PBS_QUEUE="${EVAL_PBS_QUEUE:-R9920261000}"
 EVAL_JOB_PREFIX="${EVAL_JOB_PREFIX:-0316-llmjp-eval}"
-EVAL_WANDB="${EVAL_WANDB:-0}"
+EVAL_WANDB="${EVAL_WANDB:-1}"
 EVAL_WANDB_OUTPUT_TABLE="${EVAL_WANDB_OUTPUT_TABLE:-1}"
 EVAL_WANDB_OUTPUT_TOP_N="${EVAL_WANDB_OUTPUT_TOP_N:-5}"
 
@@ -111,11 +111,9 @@ if [[ -f "${REPO_ROOT}/.env" ]]; then
     set +a
 fi
 
-source ./.env
-
-export WANDB_ENTITY=Research_00
-export WANDB_PROJECT=llm-jp-4-rl-llm-jp-eval
-export EVAL_WANDB=1
+export WANDB_ENTITY="${WANDB_ENTITY:-Research_00}"
+export WANDB_PROJECT="${WANDB_PROJECT:-llm-jp-4-rl-llm-jp-eval}"
+export EVAL_WANDB="${EVAL_WANDB:-1}"
 
 
 export HF_HOME="${HF_HOME:-${REPO_ROOT}/.cache/huggingface}"

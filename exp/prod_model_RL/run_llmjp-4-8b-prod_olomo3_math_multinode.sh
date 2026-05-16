@@ -1,9 +1,9 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #PBS -P gcg51557
 #PBS -v RTYPE=rt_HF
 #PBS -q R9920261000
 #PBS -N 0316_llm-jp-4-RL-multinode
-#PBS -l select=4
+#PBS -l select=2
 #PBS -l walltime=500:00:00
 #PBS -j oe
 #PBS -o logs/
@@ -15,7 +15,7 @@
 set -xeuo pipefail
 
 echo "Current directory: $(pwd)"
-cd ${PBS_O_WORKDIR:-$(pwd)}
+cd "${PBS_O_WORKDIR:-$(pwd)}"
 echo "Current directory: $(pwd)"
 
 mkdir -p logs

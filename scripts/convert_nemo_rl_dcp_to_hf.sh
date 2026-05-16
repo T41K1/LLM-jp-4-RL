@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #PBS -P gcg51557
-#PBS -v rt_HF
+#PBS -v RTYPE=rt_HF
 #PBS -q R9920261000
 #PBS -N 0316_llmjp4-convert-hf
 #PBS -l select=1
@@ -34,6 +34,7 @@
 #   OUTPUT_NAME=name                   Optional output directory name for qsub -v.
 #   FORCE=false                        Overwrite output when true.
 #   SAVE_SAFETENSORS=true              Set false to keep pytorch_model.bin only.
+#   TRUST_REMOTE_CODE=false            Trust custom HF code when rewriting safetensors.
 
 set -euo pipefail
 
@@ -64,6 +65,7 @@ Environment:
   OUTPUT_NAME         Optional output directory name. Useful with qsub -v.
   FORCE               Overwrite output when true. Default: false
   SAVE_SAFETENSORS    Save safetensors when true. Default: true
+  TRUST_REMOTE_CODE   Trust custom HF code when rewriting safetensors. Default: false
 EOF
 }
 
@@ -83,6 +85,7 @@ INPUT_PATH="${INPUT_PATH:-}"
 OUTPUT_NAME="${OUTPUT_NAME:-}"
 SAVE_SAFETENSORS="${SAVE_SAFETENSORS:-true}"
 FORCE="${FORCE:-false}"
+TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-false}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -217,6 +220,7 @@ if bool_true "${SAVE_SAFETENSORS}"; then
     export HF_BIN_DIR="${BIN_DIR}"
     export HF_FINAL_DIR="${FINAL_DIR}"
     export MAX_SHARD_SIZE
+    export TRUST_REMOTE_CODE
     uv run python - <<'PY'
 import os
 
@@ -225,14 +229,15 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 src = os.environ["HF_BIN_DIR"]
 dst = os.environ["HF_FINAL_DIR"]
 max_shard_size = os.environ.get("MAX_SHARD_SIZE", "5GB")
+trust_remote_code = os.environ.get("TRUST_REMOTE_CODE", "").lower() in {"1", "true", "yes"}
 
 model = AutoModelForCausalLM.from_pretrained(
     src,
     torch_dtype="auto",
-    trust_remote_code=True,
+    trust_remote_code=trust_remote_code,
     low_cpu_mem_usage=True,
 )
-tokenizer = AutoTokenizer.from_pretrained(src, trust_remote_code=True)
+tokenizer = AutoTokenizer.from_pretrained(src, trust_remote_code=trust_remote_code)
 
 model.save_pretrained(
     dst,

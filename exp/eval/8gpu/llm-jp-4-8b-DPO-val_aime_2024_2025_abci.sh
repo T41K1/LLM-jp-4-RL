@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #PBS -P gcg51557
 #PBS -v RTYPE=rt_HF
 #PBS -q R9920261000
@@ -20,7 +20,7 @@
 set -xeuo pipefail
 
 echo "Current directory: $(pwd)"
-cd ${PBS_O_WORKDIR:-$(pwd)}
+cd "${PBS_O_WORKDIR:-$(pwd)}"
 echo "Current directory: $(pwd)"
 mkdir -p logs
 

@@ -29,4 +29,6 @@ evals/
 
 .cache/
 
-docs/
+docs/_build/
+docs/.cache/
+docs/generated/

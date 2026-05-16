@@ -277,7 +277,6 @@ for rel_path in sorted(needed):
         if direct.exists():
             matches = [direct]
             break
-        matches.extend(root.rglob(rel_path.name))
 
     unique_matches = []
     seen = set()
@@ -288,8 +287,10 @@ for rel_path in sorted(needed):
             unique_matches.append(match)
 
     if len(unique_matches) == 0:
-        print(f"[WARN] Custom code file referenced by auto_map was not found: {rel_path}")
-        continue
+        raise FileNotFoundError(
+            f"Custom code file referenced by auto_map was not found: {rel_path}. "
+            "Set SOURCE_MODEL_PATH to the original HF model directory."
+        )
     if len(unique_matches) > 1:
         print(f"[WARN] Multiple candidates for {rel_path}; using {unique_matches[0]}")
 
