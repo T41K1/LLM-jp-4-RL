@@ -8,7 +8,7 @@ Usage in training script:
 Uses MathVerifier from math_utils for answer extraction and comparison.
 """
 
-from rewards.math_utils import MathVerifier
+from rewards.ground_truth_utils import MathVerifier
 
 _verifier = MathVerifier()
 
