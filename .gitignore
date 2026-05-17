@@ -16,6 +16,7 @@ data/
 outputs/
 
 checkpoints/
+hf_checkpoint/
 deps/*
 !deps/verl
 .tmp/
@@ -24,3 +25,10 @@ deps/*
 
 #model
 model/
+evals/
+
+.cache/
+
+docs/_build/
+docs/.cache/
+docs/generated/

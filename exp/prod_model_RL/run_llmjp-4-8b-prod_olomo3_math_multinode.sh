@@ -1,9 +1,9 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #PBS -P gcg51557
-#PBS -q rt_HF
+#PBS -v RTYPE=rt_HF
 #PBS -q R9920261000
 #PBS -N 0316_llm-jp-4-RL-multinode
-#PBS -l select=4
+#PBS -l select=2
 #PBS -l walltime=500:00:00
 #PBS -j oe
 #PBS -o logs/
@@ -15,7 +15,7 @@
 set -xeuo pipefail
 
 echo "Current directory: $(pwd)"
-cd ${PBS_O_WORKDIR:-$(pwd)}
+cd "${PBS_O_WORKDIR:-$(pwd)}"
 echo "Current directory: $(pwd)"
 
 mkdir -p logs
@@ -54,10 +54,21 @@ setup_ray_cluster
 MODEL_PATH=model/llm-jp-4-8b-thinking
 
 project_name='0316_llm-jp-4-RL'
-exp_name="${MODEL_PATH}-GRPO-Olmo3-Math-${NNODES}node-$(date +%Y%m%d)"
+exp_name="${EXP_NAME:-${MODEL_PATH##*/}-GRPO-Olmo3-Math-${NNODES}node-$(date +%Y%m%d)}"
 
 VAL_DUMP_DIR="outputs/val/${exp_name}"
 mkdir -p "${VAL_DUMP_DIR}"
+
+
+
+N=${MY_N}
+NUM_PROMPTS=${NUM_PROMPTS}
+ENT=1e-3 
+LR=1e-6
+MINI_BATCH_SIZE=${MINI_BATCH_SIZE}
+BS=$((${N} * ${NUM_PROMPTS}))
+MBS=$((${N} * ${MINI_BATCH_SIZE}))
+
 
 # --- 学習実行 ---
 python3 -m verl.trainer.main_ppo \
@@ -66,19 +77,20 @@ python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files=data/Dolci-Think-RL-7B-math/train.parquet \
     data.val_files='[data/AIME2024/test.parquet,data/AIME2025/test.parquet]' \
-    data.train_batch_size=512 \
+    data.train_batch_size=${NUM_PROMPTS} \
     data.max_prompt_length=2048 \
     data.max_response_length=32768 \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     actor_rollout_ref.model.path=${MODEL_PATH} \
-    actor_rollout_ref.actor.optim.lr=1e-6 \
+    actor_rollout_ref.actor.optim.lr=${LR} \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=512 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=${MINI_BATCH_SIZE} \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.actor.use_kl_loss=False \
     actor_rollout_ref.rollout.checkpoint_engine.update_weights_bucket_megabytes=4096 \
+    actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=0.0 \
+    actor_rollout_ref.actor.calculate_entropy=True \
     actor_rollout_ref.actor.entropy_coeff=0 \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
@@ -86,8 +98,8 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
-    actor_rollout_ref.rollout.n=8 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
+    actor_rollout_ref.rollout.n=${N} \
     actor_rollout_ref.rollout.val_kwargs.n=8 \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \
     actor_rollout_ref.rollout.val_kwargs.top_p=0.95 \

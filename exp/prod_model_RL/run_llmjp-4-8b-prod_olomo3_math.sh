@@ -1,6 +1,6 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #PBS -P gcg51557
-#PBS -q rt_HF
+#PBS -v RTYPE=rt_HF
 #PBS -q R9920261000  
 #PBS -N 0316_llm-jp-4-RL
 #PBS -l select=1
@@ -16,7 +16,7 @@ set -xeuo pipefail
 
 echo "Current directory: $(pwd)"
 # PBSの作業ディレクトリ（ジョブ投稿ディレクトリ）に移動
-cd ${PBS_O_WORKDIR:-$(pwd)}
+cd "${PBS_O_WORKDIR:-$(pwd)}"
 echo "Current directory: $(pwd)"
 
 #moduleをloadする
@@ -100,4 +100,4 @@ python3 -m verl.trainer.main_ppo \
     trainer.test_freq=10 \
     trainer.log_val_generations=60 \
     trainer.validation_data_dir="${VAL_DUMP_DIR}" \
-    trainer.total_epochs=15 $@
+    trainer.total_epochs=15 "$@"
