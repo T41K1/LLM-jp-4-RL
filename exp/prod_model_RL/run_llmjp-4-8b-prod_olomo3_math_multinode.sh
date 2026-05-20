@@ -53,8 +53,19 @@ setup_ray_cluster
 # --- 学習設定 ---
 MODEL_PATH=model/llm-jp-4-8b-thinking
 
+# --- GRPO advantage 正規化方式 ---
+# ADV_NORM=mean : グループ平均のみ減算 (mean only, Dr.GRPO 系)  -> norm_adv_by_std_in_grpo=False
+# ADV_NORM=std  : (r - mean) / (std + eps) (オリジナル GRPO)     -> norm_adv_by_std_in_grpo=True
+ADV_NORM="${ADV_NORM:-std}"
+case "${ADV_NORM}" in
+    mean) NORM_ADV_BY_STD=False ;;
+    std)  NORM_ADV_BY_STD=True  ;;
+    *) echo "[ERROR] ADV_NORM must be 'mean' or 'std', got '${ADV_NORM}'" >&2; exit 1 ;;
+esac
+echo "[INFO] GRPO advantage normalization: ADV_NORM=${ADV_NORM} (norm_adv_by_std_in_grpo=${NORM_ADV_BY_STD})"
+
 project_name='0316_llm-jp-4-RL'
-exp_name="${EXP_NAME:-${MODEL_PATH##*/}-GRPO-Olmo3-Math-${NNODES}node-$(date +%Y%m%d)}"
+exp_name="${EXP_NAME:-${MODEL_PATH##*/}-GRPO-Olmo3-Math-adv${ADV_NORM}-${NNODES}node-$(date +%Y%m%d)}"
 
 VAL_DUMP_DIR="outputs/val/${exp_name}"
 mkdir -p "${VAL_DUMP_DIR}"
@@ -75,6 +86,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.val_metrics.pass_at_k=true \
     +ray_kwargs.ray_init.address="${RAY_ADDRESS}" \
     algorithm.adv_estimator=grpo \
+    algorithm.norm_adv_by_std_in_grpo=${NORM_ADV_BY_STD} \
     data.train_files=data/Dolci-Think-RL-7B-math/train.parquet \
     data.val_files='[data/AIME2024/test.parquet,data/AIME2025/test.parquet]' \
     data.train_batch_size=${NUM_PROMPTS} \
