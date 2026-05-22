@@ -21,7 +21,7 @@ deps/*
 !deps/verl
 .tmp/
 
-.claude/    
+.claude/
 
 #model
 model/
@@ -32,3 +32,9 @@ evals/
 docs/_build/
 docs/.cache/
 docs/generated/
+docs/
+
+scripts/
+.zed/debug.json
+notebook/
+*.ipynb

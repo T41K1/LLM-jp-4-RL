@@ -2,8 +2,8 @@
 #PBS -P gcg51557
 #PBS -v RTYPE=rt_HF
 #PBS -q R9920261000
-#PBS -N 0316_llm-jp-4-RL-multinode
-#PBS -l select=2
+#PBS -N 0316_llm-jp-4-RL-multinode-drgrpo
+#PBS -l select=4
 #PBS -l walltime=500:00:00
 #PBS -j oe
 #PBS -o logs/
@@ -58,8 +58,8 @@ MODEL_PATH=model/llm-jp-4-8b-thinking
 # ADV_NORM=std  : (r - mean) / (std + eps) (オリジナル GRPO)     -> norm_adv_by_std_in_grpo=True
 ADV_NORM="${ADV_NORM:-std}"
 case "${ADV_NORM}" in
-    mean) NORM_ADV_BY_STD=False ;;
-    std)  NORM_ADV_BY_STD=True  ;;
+    mean) NORM_ADV_BY_STD=False; loss_agg_mode="seq-mean-token-sum-norm"; loss_scale_factor=32768 ;;
+    std)  NORM_ADV_BY_STD=True;  loss_agg_mode="token-mean";             loss_scale_factor=32768 ;;
     *) echo "[ERROR] ADV_NORM must be 'mean' or 'std', got '${ADV_NORM}'" >&2; exit 1 ;;
 esac
 echo "[INFO] GRPO advantage normalization: ADV_NORM=${ADV_NORM} (norm_adv_by_std_in_grpo=${NORM_ADV_BY_STD})"
@@ -74,7 +74,7 @@ mkdir -p "${VAL_DUMP_DIR}"
 
 N=${MY_N}
 NUM_PROMPTS=${NUM_PROMPTS}
-ENT=1e-3 
+ENT=1e-3
 LR=1e-6
 MINI_BATCH_SIZE=${MINI_BATCH_SIZE}
 BS=$((${N} * ${NUM_PROMPTS}))
@@ -87,6 +87,8 @@ python3 -m verl.trainer.main_ppo \
     +ray_kwargs.ray_init.address="${RAY_ADDRESS}" \
     algorithm.adv_estimator=grpo \
     algorithm.norm_adv_by_std_in_grpo=${NORM_ADV_BY_STD} \
+    actor_rollout_ref.actor.loss_agg_mode=${loss_agg_mode} \
+    actor_rollout_ref.actor.loss_scale_factor=${loss_scale_factor} \
     data.train_files=data/Dolci-Think-RL-7B-math/train.parquet \
     data.val_files='[data/AIME2024/test.parquet,data/AIME2025/test.parquet]' \
     data.train_batch_size=${NUM_PROMPTS} \
@@ -94,6 +96,7 @@ python3 -m verl.trainer.main_ppo \
     data.max_response_length=32768 \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
+    actor_rollout_ref.rollout.max_model_len=36864 \
     actor_rollout_ref.model.path=${MODEL_PATH} \
     actor_rollout_ref.actor.optim.lr=${LR} \
     actor_rollout_ref.model.use_remove_padding=True \
@@ -110,7 +113,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.95 \
     actor_rollout_ref.rollout.n=${N} \
     actor_rollout_ref.rollout.val_kwargs.n=8 \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \
@@ -129,8 +132,8 @@ python3 -m verl.trainer.main_ppo \
     trainer.n_gpus_per_node=${GPUS_PER_NODE} \
     trainer.nnodes=${NNODES} \
     trainer.val_before_train=True \
-    trainer.save_freq=20 \
-    trainer.test_freq=10 \
+    trainer.save_freq=50 \
+    trainer.test_freq=50 \
     trainer.log_val_generations=60 \
     trainer.validation_data_dir="${VAL_DUMP_DIR}" \
     trainer.total_epochs=15 "$@"
