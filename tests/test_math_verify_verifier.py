@@ -73,6 +73,18 @@ class VerifyResultShapeTest(unittest.TestCase):
         self.assertTrue(res.ok)
         self.assertIn(res.method, {"math_verify", "text"})
 
+    def test_uses_last_boxed_answer_only(self):
+        response = r"One failed branch gives \boxed{41}. Therefore the final answer is \boxed{42}."
+        res = verify_answer(response, "42")
+        self.assertTrue(res.ok)
+        self.assertEqual(res.pred, "42")
+
+    def test_ignores_correct_unboxed_intermediate_answer(self):
+        response = r"The value 42 appears in the derivation, but the final answer is \boxed{41}."
+        res = verify_answer(response, "42")
+        self.assertFalse(res.ok)
+        self.assertEqual(res.method, "none")
+
     def test_no_boxed_is_not_matched(self):
         # boxed が無く正解も含まれない出力は False
         res = verify_answer("I am not sure about this problem.", "42")

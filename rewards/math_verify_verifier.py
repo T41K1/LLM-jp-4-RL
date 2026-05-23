@@ -8,7 +8,7 @@ HuggingFace math_verify (latex2sympy2_extended) を主エンジンにし、
 設計方針 (reward 向け):
   1. gold (ground_truth) は `$...$` で包んで LaTeX として parse する。
      裸の `\\sqrt{2}` や区間はそのままでは parse に失敗するため。
-  2. prediction はモデル出力全体から `\\boxed{}` / `$...$` を抽出する
+  2. prediction はモデル出力の最後の `\\boxed{}` から抽出する
      (学習プロンプトに boxed 指示を付与済みなので boxed が出る前提)。
   3. math_verify が扱わない「単語回答」(Median, Friday 等) は、
      gold が text 型のときのみ厳しめの文字列一致でフォールバック。
@@ -72,6 +72,11 @@ def _extract_boxed_text(solution_str: str) -> str | None:
         return None
 
 
+def _parse_latex_answer(answer: str):
+    """裸の answer 文字列を math_verify 用の LaTeX として parse する。"""
+    return parse(f"${answer}$", extraction_config=_GOLD_CFG, parsing_timeout=_PARSE_TIMEOUT)
+
+
 def verify_answer(solution_str: str, ground_truth: str) -> VerifyResult:
     """solution_str (モデル出力) を ground_truth と照合する。
 
@@ -83,15 +88,16 @@ def verify_answer(solution_str: str, ground_truth: str) -> VerifyResult:
     # --- 1. math_verify 主経路 -------------------------------------------
     # gold を $...$ で包んで LaTeX として parse (裸の latex GT 対策)。
     try:
-        gold = parse(f"${gt}$", extraction_config=_GOLD_CFG, parsing_timeout=_PARSE_TIMEOUT)
+        gold = _parse_latex_answer(gt)
     except Exception:
         logger.warning("math_verify gold parse failed (gt=%r)", gt, exc_info=True)
         gold = []
 
     if gold:
+        boxed_text = _extract_boxed_text(solution_str)
         try:
-            # boxed/$...$/式 を自動抽出
-            target = parse(solution_str, parsing_timeout=_PARSE_TIMEOUT)
+            # 出力全文には途中式や中間の boxed が含まれうるため、最終 boxed のみを採点する。
+            target = _parse_latex_answer(boxed_text) if boxed_text is not None and len(boxed_text) <= MAX_LEN else []
         except Exception:
             logger.warning("math_verify target parse failed", exc_info=True)
             target = []
@@ -99,8 +105,7 @@ def verify_answer(solution_str: str, ground_truth: str) -> VerifyResult:
             try:
                 # verify(gold, target): gold が先。順序に注意。
                 if verify(gold, target, timeout_seconds=_VERIFY_TIMEOUT):
-                    pred = str(target[0]) if target else None
-                    return VerifyResult(True, "math_verify", pred=pred)
+                    return VerifyResult(True, "math_verify", pred=boxed_text)
             except Exception:
                 logger.warning("math_verify verify failed (gt=%r)", gt, exc_info=True)
 
