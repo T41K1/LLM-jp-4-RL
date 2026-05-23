@@ -2,8 +2,8 @@
 #PBS -P gcg51557
 #PBS -v RTYPE=rt_HF
 #PBS -q R9920261000
-#PBS -N 0316_llm-jp-4-RL-multinode-drgrpo
-#PBS -l select=4
+#PBS -N 0316_llm-jp-4-RL-prompt-math-verify
+#PBS -l select=2
 #PBS -l walltime=500:00:00
 #PBS -j oe
 #PBS -o logs/
@@ -43,6 +43,17 @@ export WANDB_ENTITY=Research_00
 echo "WANDB_API_KEY: ${WANDB_API_KEY:0:6}..."
 echo "WANDB_ENTITY: ${WANDB_ENTITY}"
 
+# --- reward verifier 選択 ---
+# REWARD_VERIFIER=math_verify : math_verify ベース (rewards/math_verify_verifier.py, 既定)
+# REWARD_VERIFIER=legacy      : 旧 MathVerifier (rewards/ground_truth_utils.py)
+# rewards/math_reward.py が import 時にこの環境変数を読むため、学習プロセス起動前に export する。
+export REWARD_VERIFIER="${REWARD_VERIFIER:-math_verify}"
+case "${REWARD_VERIFIER}" in
+    math_verify|legacy) ;;
+    *) echo "[ERROR] REWARD_VERIFIER must be 'math_verify' or 'legacy', got '${REWARD_VERIFIER}'" >&2; exit 1 ;;
+esac
+echo "[INFO] reward verifier: REWARD_VERIFIER=${REWARD_VERIFIER}"
+
 
 # --- Rayマルチノードクラスタ起動 ---
 GPUS_PER_NODE=8
@@ -65,7 +76,7 @@ esac
 echo "[INFO] GRPO advantage normalization: ADV_NORM=${ADV_NORM} (norm_adv_by_std_in_grpo=${NORM_ADV_BY_STD})"
 
 project_name='0316_llm-jp-4-RL'
-exp_name="${EXP_NAME:-${MODEL_PATH##*/}-GRPO-Olmo3-Math-adv${ADV_NORM}-${NNODES}node-$(date +%Y%m%d)}"
+exp_name="${EXP_NAME:-${MODEL_PATH##*/}-GRPO-Olmo3-Math-adv${ADV_NORM}-${REWARD_VERIFIER}-${NNODES}node-$(date +%Y%m%d)}"
 
 VAL_DUMP_DIR="outputs/val/${exp_name}"
 mkdir -p "${VAL_DUMP_DIR}"
@@ -89,7 +100,7 @@ python3 -m verl.trainer.main_ppo \
     algorithm.norm_adv_by_std_in_grpo=${NORM_ADV_BY_STD} \
     actor_rollout_ref.actor.loss_agg_mode=${loss_agg_mode} \
     actor_rollout_ref.actor.loss_scale_factor=${loss_scale_factor} \
-    data.train_files=data/Dolci-Think-RL-7B-math/train.parquet \
+    data.train_files=data/Dolci-Think-RL-7B-math/train_boxed.parquet \
     data.val_files='[data/AIME2024/test.parquet,data/AIME2025/test.parquet]' \
     data.train_batch_size=${NUM_PROMPTS} \
     data.max_prompt_length=2048 \
@@ -113,7 +124,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.95 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.90 \
     actor_rollout_ref.rollout.n=${N} \
     actor_rollout_ref.rollout.val_kwargs.n=8 \
     actor_rollout_ref.rollout.val_kwargs.temperature=0.6 \

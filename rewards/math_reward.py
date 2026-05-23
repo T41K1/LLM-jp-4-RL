@@ -5,12 +5,22 @@ Usage in training script:
     reward.custom_reward_function.path="rewards/math_reward.py" \
     reward.custom_reward_function.name="compute_score"
 
-Uses MathVerifier from math_utils for answer extraction and comparison.
+Verifier 切り替え (環境変数 REWARD_VERIFIER):
+    "math_verify" (default) : math_verify ベース (rewards/math_verify_verifier.py)
+    "legacy"                : 旧 MathVerifier (rewards/ground_truth_utils.py)
+
+参照: docs/reward-refactor.md / issue #13
 """
 
-from rewards.ground_truth_utils import MathVerifier
+import os
 
-_verifier = MathVerifier()
+from rewards.ground_truth_utils import MathVerifier
+from rewards.math_verify_verifier import verify_answer
+
+_legacy_verifier = MathVerifier()
+
+
+_VERIFIER = os.environ.get("REWARD_VERIFIER", "math_verify").lower()
 
 
 # 今後math以外のdomainに対してもreward functionを作成する
@@ -32,10 +42,24 @@ def compute_score(
         extra_info: Additional metadata (optional)
 
     Returns:
-        dict with "score" (1.0 or -1.0), "acc" (bool), "pred" (extracted answer)
+        dict with "score" (10.0 or 0.0), "acc" (bool), "pred" (extracted answer),
+        "method" (どの判定方式で一致したか: math_verify / text / none / legacy)
     """
-    result = _verifier([], solution_str, ground_truth)
-    matched = result.score > 0
-    # scoreに対して10倍をするのはOlmo3の設定値を踏襲
-    score = result.score  # 1.0 or 0.0
-    return {"score": score * 10.0, "acc": matched, "pred": result.pred or solution_str}
+    if _VERIFIER == "legacy":
+        result = _legacy_verifier([], solution_str, ground_truth)
+        matched = result.score > 0
+        # scoreに対して10倍をするのはOlmo3の設定値を踏襲
+        return {
+            "score": result.score * 10.0,
+            "acc": matched,
+            "pred": result.pred or solution_str,
+            "method": "legacy",
+        }
+
+    res = verify_answer(solution_str, ground_truth)
+    return {
+        "score": (1.0 if res.ok else 0.0) * 10.0,
+        "acc": res.ok,
+        "pred": res.pred or solution_str,
+        "method": res.method,
+    }
