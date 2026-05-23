@@ -92,5 +92,33 @@ class VerifyResultShapeTest(unittest.TestCase):
         self.assertEqual(res.method, "none")
 
 
+class FulltextFallbackTest(unittest.TestCase):
+    """boxed 未検出時の全文 math_verify フォールバック (method=math_verify_fulltext)。"""
+
+    def test_unboxed_final_answer_is_rescued(self):
+        # boxed は無いが、文中に最終式が出ているケースは全文フォールバックで拾う。
+        response = "After simplifying everything, the final answer is 42."
+        res = verify_answer(response, "42")
+        self.assertTrue(res.ok)
+        self.assertEqual(res.method, "math_verify_fulltext")
+
+    def test_fulltext_not_used_when_boxed_present(self):
+        # boxed があるときは全文を見ない: 本文中の正解 42 では救済されない。
+        response = r"The value 42 appears here, but the final answer is \boxed{41}."
+        res = verify_answer(response, "42")
+        self.assertFalse(res.ok)
+        self.assertEqual(res.method, "none")
+
+
+class SolutionClipTest(unittest.TestCase):
+    """末尾クリップ: boxed が末尾にあれば長大な前置きがあっても採点できる。"""
+
+    def test_long_prefix_then_boxed_answer(self):
+        response = "padding " * 5000 + r"Therefore the final answer is \boxed{42}."
+        res = verify_answer(response, "42")
+        self.assertTrue(res.ok)
+        self.assertEqual(res.pred, "42")
+
+
 if __name__ == "__main__":
     unittest.main()
