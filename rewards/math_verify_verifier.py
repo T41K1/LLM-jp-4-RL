@@ -84,6 +84,8 @@ def verify_answer(solution_str: str, ground_truth: str) -> VerifyResult:
         VerifyResult(ok, method, pred)
     """
     gt = str(ground_truth).strip()
+    boxed_text = _extract_boxed_text(solution_str)
+    pred_candidate = boxed_text if boxed_text is not None and len(boxed_text) <= MAX_LEN else None
 
     # --- 1. math_verify 主経路 -------------------------------------------
     # gold を $...$ で包んで LaTeX として parse (裸の latex GT 対策)。
@@ -94,10 +96,9 @@ def verify_answer(solution_str: str, ground_truth: str) -> VerifyResult:
         gold = []
 
     if gold:
-        boxed_text = _extract_boxed_text(solution_str)
         try:
             # 出力全文には途中式や中間の boxed が含まれうるため、最終 boxed のみを採点する。
-            target = _parse_latex_answer(boxed_text) if boxed_text is not None and len(boxed_text) <= MAX_LEN else []
+            target = _parse_latex_answer(pred_candidate) if pred_candidate is not None else []
         except Exception:
             logger.warning("math_verify target parse failed", exc_info=True)
             target = []
@@ -105,15 +106,14 @@ def verify_answer(solution_str: str, ground_truth: str) -> VerifyResult:
             try:
                 # verify(gold, target): gold が先。順序に注意。
                 if verify(gold, target, timeout_seconds=_VERIFY_TIMEOUT):
-                    return VerifyResult(True, "math_verify", pred=boxed_text)
+                    return VerifyResult(True, "math_verify", pred=pred_candidate)
             except Exception:
                 logger.warning("math_verify verify failed (gt=%r)", gt, exc_info=True)
 
     # --- 2. text フォールバック (gold が単語回答型のときのみ) -------------
     if _TEXT_GT_RE.match(gt):
-        boxed_text = _extract_boxed_text(solution_str)
-        if boxed_text is not None and len(boxed_text) <= MAX_LEN:
-            if _normalize_text(boxed_text) == _normalize_text(gt):
-                return VerifyResult(True, "text", pred=boxed_text)
+        if pred_candidate is not None:
+            if _normalize_text(pred_candidate) == _normalize_text(gt):
+                return VerifyResult(True, "text", pred=pred_candidate)
 
-    return VerifyResult(False, "none", pred=None)
+    return VerifyResult(False, "none", pred=pred_candidate)

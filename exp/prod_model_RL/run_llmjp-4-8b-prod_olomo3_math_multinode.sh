@@ -81,6 +81,23 @@ exp_name="${EXP_NAME:-${MODEL_PATH##*/}-GRPO-Olmo3-Math-adv${ADV_NORM}-${REWARD_
 VAL_DUMP_DIR="outputs/val/${exp_name}"
 mkdir -p "${VAL_DUMP_DIR}"
 
+# train 中の rollout dump は巨大になりうるため opt-in。
+# SAVE_TRAIN_ROLLOUTS=1 なら outputs/rollout/${exp_name} に保存する。
+# TRAIN_ROLLOUT_DUMP_DIR=/path を指定した場合はそのディレクトリに保存する。
+SAVE_TRAIN_ROLLOUTS="${SAVE_TRAIN_ROLLOUTS:-0}"
+TRAIN_ROLLOUT_DUMP_DIR="${TRAIN_ROLLOUT_DUMP_DIR:-}"
+if [[ "${SAVE_TRAIN_ROLLOUTS}" == "1" && -z "${TRAIN_ROLLOUT_DUMP_DIR}" ]]; then
+    TRAIN_ROLLOUT_DUMP_DIR="outputs/rollout/${exp_name}"
+fi
+TRAIN_ROLLOUT_DUMP_ARGS=()
+if [[ -n "${TRAIN_ROLLOUT_DUMP_DIR}" ]]; then
+    mkdir -p "${TRAIN_ROLLOUT_DUMP_DIR}"
+    TRAIN_ROLLOUT_DUMP_ARGS=(trainer.rollout_data_dir="${TRAIN_ROLLOUT_DUMP_DIR}")
+    echo "[INFO] train rollout dump: ${TRAIN_ROLLOUT_DUMP_DIR}"
+else
+    echo "[INFO] train rollout dump: disabled"
+fi
+
 
 
 N=${MY_N}
@@ -147,6 +164,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.test_freq=50 \
     trainer.log_val_generations=60 \
     trainer.validation_data_dir="${VAL_DUMP_DIR}" \
+    "${TRAIN_ROLLOUT_DUMP_ARGS[@]}" \
     trainer.total_epochs=15 "$@"
 
 echo "[INFO] Training finished."
