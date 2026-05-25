@@ -43,7 +43,8 @@ def compute_score(
 
     Returns:
         dict with "score" (10.0 or 0.0), "acc" (bool), "pred" (extracted answer),
-        "method" (どの判定方式で一致したか: math_verify / text / none / legacy)
+        "method" (どの判定方式で一致したか:
+                  math_verify / math_verify_fulltext / text / none / legacy)
     """
     if _VERIFIER == "legacy":
         result = _legacy_verifier([], solution_str, ground_truth)
