@@ -2,8 +2,8 @@
 #PBS -P gcg51557
 #PBS -v RTYPE=rt_HF
 #PBS -q R9920261000
-#PBS -N 0316_llm-jp-4-RL-prompt-math-verify
-#PBS -l select=2
+#PBS -N 0316_llm-jp-4-RL-prompt-legacy
+#PBS -l select=4
 #PBS -l walltime=500:00:00
 #PBS -j oe
 #PBS -o logs/
@@ -47,7 +47,7 @@ echo "WANDB_ENTITY: ${WANDB_ENTITY}"
 # REWARD_VERIFIER=math_verify : math_verify ベース (rewards/math_verify_verifier.py, 既定)
 # REWARD_VERIFIER=legacy      : 旧 MathVerifier (rewards/ground_truth_utils.py)
 # rewards/math_reward.py が import 時にこの環境変数を読むため、学習プロセス起動前に export する。
-export REWARD_VERIFIER="${REWARD_VERIFIER:-math_verify}"
+export REWARD_VERIFIER="${REWARD_VERIFIER:-legacy}"
 case "${REWARD_VERIFIER}" in
     math_verify|legacy) ;;
     *) echo "[ERROR] REWARD_VERIFIER must be 'math_verify' or 'legacy', got '${REWARD_VERIFIER}'" >&2; exit 1 ;;
@@ -84,7 +84,7 @@ mkdir -p "${VAL_DUMP_DIR}"
 # train 中の rollout dump は巨大になりうるため opt-in。
 # SAVE_TRAIN_ROLLOUTS=1 なら outputs/rollout/${exp_name} に保存する。
 # TRAIN_ROLLOUT_DUMP_DIR=/path を指定した場合はそのディレクトリに保存する。
-SAVE_TRAIN_ROLLOUTS="${SAVE_TRAIN_ROLLOUTS:-0}"
+SAVE_TRAIN_ROLLOUTS="${SAVE_TRAIN_ROLLOUTS:-1}"
 TRAIN_ROLLOUT_DUMP_DIR="${TRAIN_ROLLOUT_DUMP_DIR:-}"
 if [[ "${SAVE_TRAIN_ROLLOUTS}" == "1" && -z "${TRAIN_ROLLOUT_DUMP_DIR}" ]]; then
     TRAIN_ROLLOUT_DUMP_DIR="outputs/rollout/${exp_name}"
@@ -160,8 +160,8 @@ python3 -m verl.trainer.main_ppo \
     trainer.n_gpus_per_node=${GPUS_PER_NODE} \
     trainer.nnodes=${NNODES} \
     trainer.val_before_train=True \
-    trainer.save_freq=50 \
-    trainer.test_freq=50 \
+    trainer.save_freq=40 \
+    trainer.test_freq=20 \
     trainer.log_val_generations=60 \
     trainer.validation_data_dir="${VAL_DUMP_DIR}" \
     "${TRAIN_ROLLOUT_DUMP_ARGS[@]}" \

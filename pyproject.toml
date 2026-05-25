@@ -22,6 +22,7 @@ dependencies = [
     "hf>=1.1.0",
     "sympy>=1.13",
     "math-verify>=0.5.2",
+    "pytest>=9.0.3",
 ]
 
 [tool.uv.sources]
