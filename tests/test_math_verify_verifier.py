@@ -3,14 +3,25 @@
 docs/reward-refactor.md の「通すべき / 通してはいけない」ケースを検証する。
 
 Run with:
-    uv run --frozen python -B -m unittest tests.test_math_verify_verifier
+    uv run --frozen python -B -m unittest discover -s tests -p test_math_verify_verifier.py
 or:
-    .venv/bin/python -m unittest tests.test_math_verify_verifier
+    .venv/bin/python -B -m unittest discover -s tests -p test_math_verify_verifier.py
 """
 
+import time
 import unittest
 
-from rewards.math_verify_verifier import verify_answer
+from rewards.math_verify_verifier import _MathVerifyWorkerPool, verify_answer
+
+
+def _hanging_worker_loop(request_queue, response_queue, ready_queue):
+    """Test worker that accepts work and never responds."""
+    ready_queue.put(True)
+    while True:
+        request = request_queue.get()
+        if request is None:
+            return
+        time.sleep(60)
 
 
 def _boxed(ans: str) -> str:
@@ -118,6 +129,30 @@ class SolutionClipTest(unittest.TestCase):
         res = verify_answer(response, "42")
         self.assertTrue(res.ok)
         self.assertEqual(res.pred, "42")
+
+
+class WorkerPoolTimeoutTest(unittest.TestCase):
+    def test_timeout_restarts_hanging_worker(self):
+        pool = _MathVerifyWorkerPool(
+            max_workers=1,
+            timeout_sec=0.2,
+            acquire_timeout_sec=1.0,
+            startup_timeout_sec=5.0,
+            start_method="forkserver",
+            worker_target=_hanging_worker_loop,
+        )
+        try:
+            start = time.monotonic()
+            res = pool.compute("ignored", "42")
+            elapsed = time.monotonic() - start
+            stats = pool.get_stats()
+        finally:
+            pool.close()
+
+        self.assertFalse(res.ok)
+        self.assertEqual(res.method, "timeout")
+        self.assertLess(elapsed, 5.0)
+        self.assertEqual(stats["worker_restart_timeout_count"], 1)
 
 
 if __name__ == "__main__":

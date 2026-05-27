@@ -43,6 +43,9 @@ export WANDB_ENTITY=Research_00
 echo "WANDB_API_KEY: ${WANDB_API_KEY:0:6}..."
 echo "WANDB_ENTITY: ${WANDB_ENTITY}"
 
+export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+export TORCH_NCCL_TRACE_BUFFER_SIZE=1048576
+
 # --- reward verifier 選択 ---
 # REWARD_VERIFIER=math_verify : math_verify ベース (rewards/math_verify_verifier.py, 既定)
 # REWARD_VERIFIER=legacy      : 旧 MathVerifier (rewards/ground_truth_utils.py)
@@ -160,7 +163,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.n_gpus_per_node=${GPUS_PER_NODE} \
     trainer.nnodes=${NNODES} \
     trainer.val_before_train=True \
-    trainer.save_freq=40 \
+    trainer.save_freq=20 \
     trainer.test_freq=20 \
     trainer.log_val_generations=60 \
     trainer.validation_data_dir="${VAL_DUMP_DIR}" \

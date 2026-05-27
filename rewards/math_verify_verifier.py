@@ -22,9 +22,17 @@ HuggingFace math_verify (latex2sympy2_extended) を主エンジンにし、
 参照: docs/reward-refactor.md / issue #13
 """
 
+import atexit
 import logging
+import multiprocessing as mp
+import os
+import queue as queue_mod
 import re
+import threading
+import time
+import traceback
 from dataclasses import dataclass
+from typing import Callable
 
 from math_verify import parse, verify
 from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig
@@ -59,8 +67,346 @@ _TEXT_GT_RE = re.compile(r"^[A-Za-z][A-Za-z \-]*$")
 @dataclass
 class VerifyResult:
     ok: bool
-    method: str  # "math_verify" | "text" | "math_verify_fulltext" | "none"
+    method: str  # "math_verify" | "text" | "math_verify_fulltext" | "none" | "timeout" | "worker_error" | "server_busy"
     pred: str | None = None
+
+
+@dataclass
+class _WorkerHandle:
+    index: int
+    process: mp.Process
+    request_queue: mp.Queue
+    response_queue: mp.Queue
+    busy: bool = False
+    requests_completed: int = 0
+    restarts: int = 0
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_int(name: str, default: int, minimum: int | None = None) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError:
+        logger.warning("Invalid %s=%r; using %d", name, os.environ.get(name), default)
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
+def _env_float(name: str, default: float, minimum: float | None = None) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except ValueError:
+        logger.warning("Invalid %s=%r; using %.2f", name, os.environ.get(name), default)
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
+def _math_verify_worker_loop(request_queue: mp.Queue, response_queue: mp.Queue, ready_queue: mp.Queue) -> None:
+    """Run math_verify work in an isolated process.
+
+    The worker calls `_verify_answer_impl()` directly. Calling public
+    `verify_answer()` here would recursively enter the process pool.
+    """
+    ready_queue.put(True)
+    while True:
+        request = request_queue.get()
+        if request is None:
+            return
+
+        try:
+            result = _verify_answer_impl(request["solution_str"], request["ground_truth"])
+            response_queue.put(("ok", result))
+        except BaseException as exc:  # noqa: BLE001
+            response_queue.put(
+                (
+                    "err",
+                    {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                        "traceback": traceback.format_exc(),
+                    },
+                )
+            )
+
+
+class _MathVerifyWorkerPool:
+    """Small local worker pool with hard process timeout.
+
+    This mirrors the 0537 reward_score server design at the verifier boundary:
+    keep math_verify in persistent child processes, and replace a child when it
+    times out or errors. The surrounding Ray reward worker stays alive.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_workers: int,
+        timeout_sec: float,
+        acquire_timeout_sec: float,
+        startup_timeout_sec: float,
+        max_requests_per_worker: int | None = None,
+        start_method: str = "forkserver",
+        worker_target: Callable[[mp.Queue, mp.Queue, mp.Queue], None] = _math_verify_worker_loop,
+    ) -> None:
+        self._max_workers = max_workers
+        self._timeout_sec = timeout_sec
+        self._acquire_timeout_sec = acquire_timeout_sec
+        self._startup_timeout_sec = startup_timeout_sec
+        self._max_requests_per_worker = max_requests_per_worker
+        self._worker_target = worker_target
+        self._start_method = start_method
+        self._mp_context = self._get_mp_context(start_method)
+        self._lock = threading.Lock()
+        self._workers: list[_WorkerHandle] = []
+        self._restart_counts = {
+            "timeout": 0,
+            "error": 0,
+            "max_requests": 0,
+            "dead_process": 0,
+        }
+
+    @classmethod
+    def from_env(cls) -> "_MathVerifyWorkerPool":
+        max_requests = _env_int("MATH_VERIFY_MAX_REQUESTS_PER_WORKER", 0)
+        return cls(
+            max_workers=_env_int("MATH_VERIFY_WORKERS", 2, minimum=1),
+            timeout_sec=_env_float("MATH_VERIFY_TIMEOUT_SEC", 10.0, minimum=0.001),
+            acquire_timeout_sec=_env_float("MATH_VERIFY_ACQUIRE_TIMEOUT_SEC", 30.0, minimum=0.001),
+            startup_timeout_sec=_env_float("MATH_VERIFY_STARTUP_TIMEOUT_SEC", 30.0, minimum=0.001),
+            max_requests_per_worker=max_requests if max_requests > 0 else None,
+            start_method=os.environ.get("MATH_VERIFY_MP_START_METHOD", "forkserver"),
+        )
+
+    def start(self) -> None:
+        with self._lock:
+            if self._workers:
+                return
+            last_exc: BaseException | None = None
+            for start_method in self._candidate_start_methods(self._start_method):
+                self._mp_context = self._get_mp_context(start_method)
+                self._start_method = start_method
+                workers: list[_WorkerHandle] = []
+                try:
+                    for index in range(self._max_workers):
+                        workers.append(self._create_worker(index))
+                    self._workers = workers
+                    return
+                except BaseException as exc:  # noqa: BLE001
+                    last_exc = exc
+                    logger.warning(
+                        "Failed to start math_verify worker pool with %s: %s",
+                        start_method,
+                        exc,
+                    )
+                    for worker in workers:
+                        self._shutdown_worker(worker)
+                    self._workers = []
+            assert last_exc is not None
+            raise last_exc
+
+    def close(self) -> None:
+        with self._lock:
+            workers = self._workers
+            self._workers = []
+
+        for worker in workers:
+            self._shutdown_worker(worker)
+
+    def compute(self, solution_str: str, ground_truth: str) -> VerifyResult:
+        self.start()
+        worker = self._acquire_worker()
+        if worker is None:
+            logger.warning(
+                "math_verify worker pool busy for %.2fs; returning server_busy",
+                self._acquire_timeout_sec,
+            )
+            return VerifyResult(False, "server_busy", pred=None)
+
+        restart_reason = None
+        try:
+            worker.request_queue.put(
+                {"solution_str": solution_str, "ground_truth": ground_truth},
+                timeout=0.1,
+            )
+            status, value = worker.response_queue.get(timeout=self._timeout_sec)
+            worker.requests_completed += 1
+            if status == "ok":
+                restart_reason = self._get_recycle_reason(worker)
+                return value
+
+            logger.warning("math_verify worker error: %s", value)
+            restart_reason = "error"
+            return VerifyResult(False, "worker_error", pred=None)
+        except queue_mod.Empty:
+            logger.warning("math_verify worker timed out after %.2fs", self._timeout_sec)
+            restart_reason = "timeout"
+            return VerifyResult(False, "timeout", pred=None)
+        except Exception as exc:
+            logger.warning("math_verify worker pool failed: %s", exc, exc_info=True)
+            restart_reason = "error"
+            return VerifyResult(False, "worker_error", pred=None)
+        finally:
+            if restart_reason is None:
+                self._release_worker(worker)
+            else:
+                self._restart_worker(worker, restart_reason)
+
+    def get_stats(self) -> dict[str, int]:
+        with self._lock:
+            return {
+                "worker_count": len(self._workers),
+                "worker_restart_count": sum(self._restart_counts.values()),
+                **{f"worker_restart_{k}_count": v for k, v in self._restart_counts.items()},
+            }
+
+    def _create_worker(self, index: int) -> _WorkerHandle:
+        request_queue = self._mp_context.Queue(maxsize=1)
+        response_queue = self._mp_context.Queue(maxsize=1)
+        ready_queue = self._mp_context.Queue(maxsize=1)
+        process = self._mp_context.Process(
+            target=self._worker_target,
+            args=(request_queue, response_queue, ready_queue),
+            daemon=True,
+            name=f"math-verify-worker-{index}",
+        )
+        success = False
+        try:
+            process.start()
+            ready_queue.get(timeout=self._startup_timeout_sec)
+            success = True
+        except queue_mod.Empty as exc:
+            self._terminate_process(process)
+            raise RuntimeError(
+                f"math_verify worker {index} failed to start within {self._startup_timeout_sec:.2f}s"
+            ) from exc
+        except BaseException:
+            self._terminate_process(process)
+            raise
+        finally:
+            ready_queue.close()
+            if not success:
+                request_queue.close()
+                response_queue.close()
+
+        return _WorkerHandle(
+            index=index,
+            process=process,
+            request_queue=request_queue,
+            response_queue=response_queue,
+        )
+
+    def _shutdown_worker(self, worker: _WorkerHandle) -> None:
+        if worker.process.is_alive():
+            try:
+                worker.request_queue.put_nowait(None)
+            except Exception:  # noqa: BLE001
+                pass
+            worker.process.join(timeout=0.5)
+            self._terminate_process(worker.process)
+
+        worker.request_queue.close()
+        worker.response_queue.close()
+
+    def _terminate_process(self, process: mp.Process) -> None:
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=1.0)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=1.0)
+
+    def _acquire_worker(self) -> _WorkerHandle | None:
+        deadline = time.monotonic() + self._acquire_timeout_sec
+        while True:
+            with self._lock:
+                for worker in list(self._workers):
+                    if not worker.process.is_alive():
+                        worker = self._replace_worker_locked(worker, "dead_process")
+                    if worker.busy:
+                        continue
+                    worker.busy = True
+                    return worker
+
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.01)
+
+    def _release_worker(self, worker: _WorkerHandle) -> None:
+        with self._lock:
+            if worker.index >= len(self._workers):
+                return
+            if self._workers[worker.index] is not worker:
+                return
+            worker.busy = False
+
+    def _restart_worker(self, worker: _WorkerHandle, reason: str) -> None:
+        with self._lock:
+            if worker.index >= len(self._workers):
+                return
+            if self._workers[worker.index] is not worker:
+                return
+            self._replace_worker_locked(worker, reason)
+
+    def _replace_worker_locked(self, worker: _WorkerHandle, reason: str) -> _WorkerHandle:
+        self._shutdown_worker(worker)
+        new_worker = self._create_worker(worker.index)
+        new_worker.restarts = worker.restarts + 1
+        self._workers[worker.index] = new_worker
+        self._restart_counts[reason] = self._restart_counts.get(reason, 0) + 1
+        return new_worker
+
+    def _get_recycle_reason(self, worker: _WorkerHandle) -> str | None:
+        if self._max_requests_per_worker is None:
+            return None
+        if worker.requests_completed >= self._max_requests_per_worker:
+            return "max_requests"
+        return None
+
+    def _candidate_start_methods(self, preferred: str) -> list[str]:
+        available = set(mp.get_all_start_methods())
+        candidates = [preferred]
+        if preferred == "forkserver":
+            candidates.append("fork")
+        elif preferred == "spawn":
+            candidates.append("fork")
+        elif preferred not in available:
+            candidates.extend(["forkserver", "fork"])
+
+        deduped = []
+        for method in candidates:
+            if method in available and method not in deduped:
+                deduped.append(method)
+        return deduped or [mp.get_start_method(allow_none=True) or "fork"]
+
+    def _get_mp_context(self, start_method: str):
+        try:
+            return mp.get_context(start_method)
+        except ValueError:
+            logger.warning("Unsupported multiprocessing start method %r; falling back to default", start_method)
+            return mp.get_context()
+
+
+_POOL_LOCK = threading.Lock()
+_POOL: _MathVerifyWorkerPool | None = None
+
+
+def _get_pool() -> _MathVerifyWorkerPool:
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is None:
+            _POOL = _MathVerifyWorkerPool.from_env()
+            atexit.register(_POOL.close)
+        return _POOL
 
 
 def _normalize_text(s: str) -> str:
@@ -96,7 +442,7 @@ def _parse_freeform(text: str):
     return parse(text, extraction_config=_GOLD_CFG, parsing_timeout=_PARSE_TIMEOUT)
 
 
-def verify_answer(solution_str: str, ground_truth: str) -> VerifyResult:
+def _verify_answer_impl(solution_str: str, ground_truth: str) -> VerifyResult:
     """solution_str (モデル出力) を ground_truth と照合する。
 
     Returns:
@@ -161,3 +507,14 @@ def verify_answer(solution_str: str, ground_truth: str) -> VerifyResult:
                 logger.warning("math_verify fulltext verify failed (gt=%r)", gt, exc_info=True)
 
     return VerifyResult(False, "none", pred=pred_candidate)
+
+
+def verify_answer(solution_str: str, ground_truth: str) -> VerifyResult:
+    """Timeout-protected public verifier entrypoint.
+
+    By default this runs math_verify inside a small persistent subprocess pool.
+    Set `MATH_VERIFY_POOL_ENABLED=0` to bypass the pool for local debugging.
+    """
+    if not _env_bool("MATH_VERIFY_POOL_ENABLED", True):
+        return _verify_answer_impl(solution_str, ground_truth)
+    return _get_pool().compute(str(solution_str), str(ground_truth))
