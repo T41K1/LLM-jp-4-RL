@@ -34,6 +34,9 @@ docs/.cache/
 docs/generated/
 docs/
 
+# Experiment status
+exp/prod_model_RL/experiments_status.md
+
 scripts/
 .zed/debug.json
 notebook/
