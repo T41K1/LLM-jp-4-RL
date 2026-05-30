@@ -57,10 +57,25 @@ def compute_score(
             "method": "legacy",
         }
 
-    res = verify_answer(solution_str, ground_truth)
+    extra_info = extra_info or {}
+    verifier_solution_str = extra_info.get("response_str_with_special_tokens", solution_str)
+    res = verify_answer(verifier_solution_str, ground_truth)
     return {
         "score": (1.0 if res.ok else 0.0) * 10.0,
         "acc": res.ok,
         "pred": res.pred or solution_str,
         "method": res.method,
+        "scored_channel": res.scored_channel,
+        "has_harmony": res.has_harmony,
+        "has_harmony_final": res.has_harmony_final,
+        "analysis_ok": res.analysis_ok,
+        "analysis_method": res.analysis_method,
+        "boxed_found": res.boxed_found,
+        "boxed_missing": res.boxed_missing,
+        "boxed_too_long": res.boxed_too_long,
+        "boxed_parse_ok": res.boxed_parse_ok,
+        "boxed_match": res.boxed_match,
+        "fulltext_fallback_used": res.fulltext_fallback_used,
+        "fulltext_fallback_match": res.fulltext_fallback_match,
+        "gold_parse_ok": res.gold_parse_ok,
     }

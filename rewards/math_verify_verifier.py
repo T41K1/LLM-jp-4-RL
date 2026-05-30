@@ -1,23 +1,15 @@
 """
 math_verify ベースの数学 reward verifier。
 
-旧 `MathVerifier` (rewards/ground_truth_utils.py) を置き換える PoC。
-HuggingFace math_verify (latex2sympy2_extended) を主エンジンにし、
-記号・数値・分数・区間・集合・行列の等価判定を堅牢に行う。
-
 設計方針 (reward 向け):
   0. 採点前に solution_str を末尾基準でクリップする (暴走生成/長文対策)。
-     boxed は通常末尾付近に出るため、先頭ではなく末尾を残す。
-  1. gold (ground_truth) は `$...$` で包んで LaTeX として parse する。
-     裸の `\\sqrt{2}` や区間はそのままでは parse に失敗するため。
-  2. prediction はモデル出力の最後の `\\boxed{}` から抽出する
-     (学習プロンプトに boxed 指示を付与済みなので boxed が出る前提)。
-  3. math_verify が扱わない「単語回答」(Median, Friday 等) は、
-     gold が text 型のときのみ厳しめの文字列一致でフォールバック。
-  4. boxed が抽出できなかった場合に限り、出力全文に math_verify をかけて
-     式抽出で救済する (method="math_verify_fulltext")。boxed があるときは
-     誤一致防止のため全文は見ない。
-  5. どの method で一致したかを返し、false positive 監視に使う。
+  1. OpenAI Harmony special token が残っている場合は、assistant の final
+     channel だけを reward 判定に使う。
+  2. analysis channel にだけ正答がある場合は reward せず、diagnostic として
+     analysis_ok / analysis_method に記録する。
+  3. final 内に boxed がある場合は最後の `\\boxed{}` のみを採点する。
+  4. final 内に boxed が無い場合は、final text に限って math_verify の
+     freeform 抽出で救済する (method="math_verify_fulltext")。
 
 参照: docs/reward-refactor.md / issue #13
 """
@@ -44,16 +36,12 @@ logger = logging.getLogger(__name__)
 # 比較対象 (抽出後 boxed) の上限長。長すぎる候補は誤一致と遅延の原因になるため弾く。
 MAX_LEN = 512
 
-# 採点前に solution_str 全体を末尾基準でクリップする上限長。
+# 採点前に solution_str 構造抽出後の採点対象を末尾基準でクリップする上限長。
 # 暴走生成や極端に長い出力で parser が遅延/OOM するのを防ぐ。boxed や最終式は
 # 末尾付近に出るため、先頭ではなく末尾 _SOLUTION_CLIP_CHARS 文字を残す。
 _SOLUTION_CLIP_CHARS = 8192
 
-# math_verify の parse()/verify() は内部で signal.SIGALRM ベースの timeout を使うが、
-# signal はメインスレッドでしか登録できない。verl は reward (compute_score) を
-# ワーカースレッドで呼ぶため、timeout を有効にすると毎回
-# "ValueError: signal only works in main thread" で落ち、全件 0 点になる。
-# math_verify 自体は十分速い (~12ms/件) ので signal timeout を無効化する。
+
 _PARSE_TIMEOUT = None
 _VERIFY_TIMEOUT = None
 
@@ -64,13 +52,44 @@ _GOLD_CFG = [LatexExtractionConfig(), ExprExtractionConfig()]
 _TEXT_GT_RE = re.compile(r"^[A-Za-z][A-Za-z \-]*$")
 
 
+# verifierの判定結果を
 @dataclass
 class VerifyResult:
     ok: bool
-    method: str  # "math_verify" | "text" | "math_verify_fulltext" | "none" | "timeout" | "worker_error" | "server_busy"
+    method: str  # math_verify | text | math_verify_fulltext | none | no_final | harmony_parse_failed | format_violation | timeout/error states
     pred: str | None = None
+    scored_channel: str = "raw"  # "raw" | "final" |
+    has_harmony: bool = False
+    has_harmony_final: bool = False
+    analysis_ok: bool = False
+    analysis_method: str = "none"
+    boxed_found: bool = False
+    boxed_missing: bool = False
+    boxed_too_long: bool = False
+    boxed_parse_ok: bool = False
+    boxed_match: bool = False
+    fulltext_fallback_used: bool = False
+    fulltext_fallback_match: bool = False
+    gold_parse_ok: bool = False
 
 
+@dataclass(frozen=True)
+class _HarmonyTextMessage:
+    end: str
+    role: str | None = None
+    channel: str | None = None
+    constrain: str | None = None
+    content: str | None = None
+
+
+@dataclass(frozen=True)
+class _HarmonyScope:
+    final_text: str | None
+    analysis_text: str | None
+    has_final: bool
+
+
+# process child processの管理
 @dataclass
 class _WorkerHandle:
     index: int
@@ -111,7 +130,9 @@ def _env_float(name: str, default: float, minimum: float | None = None) -> float
     return value
 
 
-def _math_verify_worker_loop(request_queue: mp.Queue, response_queue: mp.Queue, ready_queue: mp.Queue) -> None:
+def _math_verify_worker_loop(
+    request_queue: mp.Queue, response_queue: mp.Queue, ready_queue: mp.Queue
+) -> None:
     """Run math_verify work in an isolated process.
 
     The worker calls `_verify_answer_impl()` directly. Calling public
@@ -124,7 +145,9 @@ def _math_verify_worker_loop(request_queue: mp.Queue, response_queue: mp.Queue, 
             return
 
         try:
-            result = _verify_answer_impl(request["solution_str"], request["ground_truth"])
+            result = _verify_answer_impl(
+                request["solution_str"], request["ground_truth"]
+            )
             response_queue.put(("ok", result))
         except BaseException as exc:  # noqa: BLE001
             response_queue.put(
@@ -156,7 +179,9 @@ class _MathVerifyWorkerPool:
         startup_timeout_sec: float,
         max_requests_per_worker: int | None = None,
         start_method: str = "forkserver",
-        worker_target: Callable[[mp.Queue, mp.Queue, mp.Queue], None] = _math_verify_worker_loop,
+        worker_target: Callable[
+            [mp.Queue, mp.Queue, mp.Queue], None
+        ] = _math_verify_worker_loop,
     ) -> None:
         self._max_workers = max_workers
         self._timeout_sec = timeout_sec
@@ -181,8 +206,12 @@ class _MathVerifyWorkerPool:
         return cls(
             max_workers=_env_int("MATH_VERIFY_WORKERS", 2, minimum=1),
             timeout_sec=_env_float("MATH_VERIFY_TIMEOUT_SEC", 10.0, minimum=0.001),
-            acquire_timeout_sec=_env_float("MATH_VERIFY_ACQUIRE_TIMEOUT_SEC", 30.0, minimum=0.001),
-            startup_timeout_sec=_env_float("MATH_VERIFY_STARTUP_TIMEOUT_SEC", 30.0, minimum=0.001),
+            acquire_timeout_sec=_env_float(
+                "MATH_VERIFY_ACQUIRE_TIMEOUT_SEC", 30.0, minimum=0.001
+            ),
+            startup_timeout_sec=_env_float(
+                "MATH_VERIFY_STARTUP_TIMEOUT_SEC", 30.0, minimum=0.001
+            ),
             max_requests_per_worker=max_requests if max_requests > 0 else None,
             start_method=os.environ.get("MATH_VERIFY_MP_START_METHOD", "forkserver"),
         )
@@ -248,7 +277,9 @@ class _MathVerifyWorkerPool:
             restart_reason = "error"
             return VerifyResult(False, "worker_error", pred=None)
         except queue_mod.Empty:
-            logger.warning("math_verify worker timed out after %.2fs", self._timeout_sec)
+            logger.warning(
+                "math_verify worker timed out after %.2fs", self._timeout_sec
+            )
             restart_reason = "timeout"
             return VerifyResult(False, "timeout", pred=None)
         except Exception as exc:
@@ -266,7 +297,10 @@ class _MathVerifyWorkerPool:
             return {
                 "worker_count": len(self._workers),
                 "worker_restart_count": sum(self._restart_counts.values()),
-                **{f"worker_restart_{k}_count": v for k, v in self._restart_counts.items()},
+                **{
+                    f"worker_restart_{k}_count": v
+                    for k, v in self._restart_counts.items()
+                },
             }
 
     def _create_worker(self, index: int) -> _WorkerHandle:
@@ -357,7 +391,9 @@ class _MathVerifyWorkerPool:
                 return
             self._replace_worker_locked(worker, reason)
 
-    def _replace_worker_locked(self, worker: _WorkerHandle, reason: str) -> _WorkerHandle:
+    def _replace_worker_locked(
+        self, worker: _WorkerHandle, reason: str
+    ) -> _WorkerHandle:
         self._shutdown_worker(worker)
         new_worker = self._create_worker(worker.index)
         new_worker.restarts = worker.restarts + 1
@@ -392,7 +428,10 @@ class _MathVerifyWorkerPool:
         try:
             return mp.get_context(start_method)
         except ValueError:
-            logger.warning("Unsupported multiprocessing start method %r; falling back to default", start_method)
+            logger.warning(
+                "Unsupported multiprocessing start method %r; falling back to default",
+                start_method,
+            )
             return mp.get_context()
 
 
@@ -430,7 +469,9 @@ def _extract_boxed_text(solution_str: str) -> str | None:
 
 def _parse_latex_answer(answer: str):
     """裸の answer 文字列を math_verify 用の LaTeX として parse する。"""
-    return parse(f"${answer}$", extraction_config=_GOLD_CFG, parsing_timeout=_PARSE_TIMEOUT)
+    return parse(
+        f"${answer}$", extraction_config=_GOLD_CFG, parsing_timeout=_PARSE_TIMEOUT
+    )
 
 
 def _parse_freeform(text: str):
@@ -442,11 +483,127 @@ def _parse_freeform(text: str):
     return parse(text, extraction_config=_GOLD_CFG, parsing_timeout=_PARSE_TIMEOUT)
 
 
-def _verify_answer_impl(solution_str: str, ground_truth: str) -> VerifyResult:
-    """solution_str (モデル出力) を ground_truth と照合する。
+_HARMONY_TOKEN_RE = re.compile(
+    r"(<\|start\|>|<\|channel\|>|<\|constrain\|>|<\|message\|>|<\|end\|>|<\|return\|>|<\|call\|>)"
+)
+_HARMONY_BEGIN_MAP = {
+    "<|start|>": "role",
+    "<|channel|>": "channel",
+    "<|constrain|>": "constrain",
+    "<|message|>": "content",
+}
+_HARMONY_END_TOKENS = {"<|end|>", "<|return|>", "<|call|>"}
+_ASSISTANT_FINAL_RE = re.compile(r"\bassistant\s*final\b|\bassistantfinal", re.I)
+
+
+def _iter_harmony_text_messages(text: str):
+    """OpenAI Harmony special token を含む decoded text から message を切り出す。
+
+    `llm-jp-4-8b-thinking/llmjp4_harmony.py` の token-id lexer と同じ
+    section 遷移を decoded string 上で行う。reward manager からは response 部分
+    だけが渡るため、先頭 message は role を持たず `<|channel|>` から始まる場合がある。
+    """
+    message_dict: dict[str, str] = {}
+    section: str | None = None
+    text_parts: list[str] = []
+
+    for part in _HARMONY_TOKEN_RE.split(text):
+        if not part:
+            continue
+
+        if part in _HARMONY_BEGIN_MAP:
+            if section is not None:
+                message_dict[section] = "".join(text_parts)
+            section = _HARMONY_BEGIN_MAP[part]
+            text_parts = []
+            continue
+
+        if part in _HARMONY_END_TOKENS:
+            if section is not None:
+                message_dict[section] = "".join(text_parts)
+            if message_dict:
+                yield _HarmonyTextMessage(**message_dict, end=part)
+            message_dict = {}
+            section = None
+            text_parts = []
+            continue
+
+        if section is not None:
+            text_parts.append(part)
+
+    if section is not None:
+        message_dict[section] = "".join(text_parts)
+        if message_dict:
+            yield _HarmonyTextMessage(**message_dict, end="incomplete")
+
+
+def _harmony_channel_name(channel: str | None) -> str | None:
+    if channel is None:
+        return None
+    channel = channel.strip()
+    if not channel:
+        return None
+    return channel.split()[0]
+
+
+def _is_assistant_harmony_message(message: _HarmonyTextMessage) -> bool:
+    # response_ids のみを parse した場合、generation prompt の `<|start|>assistant`
+    # は prompt 側にあり、生成部分は `<|channel|>` から始まる。
+    if message.role is None:
+        return True
+    role = message.role.strip()
+    if not role:
+        return False
+    return role.split()[0] == "assistant"
+
+
+def _extract_harmony_scope(solution_str: str) -> _HarmonyScope | None:
+    messages = [
+        m
+        for m in _iter_harmony_text_messages(solution_str)
+        if _is_assistant_harmony_message(m)
+    ]
+    if not messages:
+        return None
+
+    final_texts = [
+        m.content or ""
+        for m in messages
+        if _harmony_channel_name(m.channel) == "final" and m.content is not None
+    ]
+    analysis_texts = [
+        m.content or ""
+        for m in messages
+        if _harmony_channel_name(m.channel) == "analysis" and m.content
+    ]
+
+    return _HarmonyScope(
+        final_text=final_texts[-1] if final_texts else None,
+        analysis_text="\n".join(analysis_texts) if analysis_texts else None,
+        has_final=bool(final_texts),
+    )
+
+
+def _extract_plain_assistant_final_scope(solution_str: str) -> _HarmonyScope | None:
+    """Special token が消えた degraded Harmony text から final 範囲を切る。"""
+    matches = list(_ASSISTANT_FINAL_RE.finditer(solution_str))
+    if not matches:
+        return None
+
+    match = matches[-1]
+    analysis_text = solution_str[: match.start()]
+    return _HarmonyScope(
+        final_text=solution_str[match.end() :],
+        analysis_text=analysis_text if analysis_text else None,
+        has_final=True,
+    )
+
+
+def _verify_answer_text_impl(solution_str: str, ground_truth: str) -> VerifyResult:
+    """1 つの採点対象テキストを ground_truth と照合する。
 
     Returns:
-        VerifyResult(ok, method, pred)
+        VerifyResult containing the reward decision, match method, and extracted prediction.
     """
     gt = str(ground_truth).strip()
 
@@ -457,15 +614,30 @@ def _verify_answer_impl(solution_str: str, ground_truth: str) -> VerifyResult:
         solution_str = solution_str[-_SOLUTION_CLIP_CHARS:]
 
     boxed_text = _extract_boxed_text(solution_str)
-    pred_candidate = boxed_text if boxed_text is not None and len(boxed_text) <= MAX_LEN else None
+    boxed_found = boxed_text is not None
+    boxed_too_long = boxed_text is not None and len(boxed_text) > MAX_LEN
+    pred_candidate = (
+        boxed_text if boxed_text is not None and len(boxed_text) <= MAX_LEN else None
+    )
+    result_base = {
+        "boxed_found": boxed_found,
+        "boxed_missing": not boxed_found,
+        "boxed_too_long": boxed_too_long,
+    }
 
-    # --- 1. text フォールバック (gold が単語回答型のときのみ) -------------
+    # --- text フォールバック (gold が単語回答型のときのみ) -------------
     # math_verify が単語を文字列として一致させる場合もあるが、単語回答は監視上
     # "text" として記録したいので math_verify より先に判定する。
     if _TEXT_GT_RE.match(gt):
         if pred_candidate is not None:
             if _normalize_text(pred_candidate) == _normalize_text(gt):
-                return VerifyResult(True, "text", pred=pred_candidate)
+                return VerifyResult(
+                    True,
+                    "text",
+                    pred=pred_candidate,
+                    boxed_match=True,
+                    **result_base,
+                )
 
     # gold を $...$ で包んで LaTeX として parse (裸の latex GT 対策)。
     try:
@@ -473,27 +645,42 @@ def _verify_answer_impl(solution_str: str, ground_truth: str) -> VerifyResult:
     except Exception:
         logger.warning("math_verify gold parse failed (gt=%r)", gt, exc_info=True)
         gold = []
+    result_base["gold_parse_ok"] = bool(gold)
 
     # --- 1. math_verify 主経路 (最終 boxed のみ採点) ---------------------
     if gold:
+        boxed_parse_ok = False
         try:
             # 出力全文には途中式や中間の boxed が含まれうるため、最終 boxed のみを採点する。
-            target = _parse_latex_answer(pred_candidate) if pred_candidate is not None else []
+            target = (
+                _parse_latex_answer(pred_candidate)
+                if pred_candidate is not None
+                else []
+            )
+            boxed_parse_ok = bool(target)
         except Exception:
             logger.warning("math_verify target parse failed", exc_info=True)
             target = []
+        result_base["boxed_parse_ok"] = boxed_parse_ok
         if target:
             try:
                 # verify(gold, target): gold が先。順序に注意。
                 if verify(gold, target, timeout_seconds=_VERIFY_TIMEOUT):
-                    return VerifyResult(True, "math_verify", pred=pred_candidate)
+                    return VerifyResult(
+                        True,
+                        "math_verify",
+                        pred=pred_candidate,
+                        boxed_match=True,
+                        **result_base,
+                    )
             except Exception:
                 logger.warning("math_verify verify failed (gt=%r)", gt, exc_info=True)
 
-    # --- 3. 全文 math_verify フォールバック (boxed 未検出時のみ) ----------
+    # --- 2. 全文 math_verify フォールバック (boxed 未検出時のみ) ----------
     # boxed があるのに全文を見ると途中式・本文中の数値に誤一致しやすいので、
     # boxed がそもそも取れなかったケースに限定して救済する。
     if gold and boxed_text is None:
+        result_base["fulltext_fallback_used"] = True
         try:
             target = _parse_freeform(solution_str)
         except Exception:
@@ -502,11 +689,75 @@ def _verify_answer_impl(solution_str: str, ground_truth: str) -> VerifyResult:
         if target:
             try:
                 if verify(gold, target, timeout_seconds=_VERIFY_TIMEOUT):
-                    return VerifyResult(True, "math_verify_fulltext", pred=None)
+                    return VerifyResult(
+                        True,
+                        "math_verify_fulltext",
+                        pred=None,
+                        fulltext_fallback_match=True,
+                        **result_base,
+                    )
             except Exception:
-                logger.warning("math_verify fulltext verify failed (gt=%r)", gt, exc_info=True)
+                logger.warning(
+                    "math_verify fulltext verify failed (gt=%r)", gt, exc_info=True
+                )
 
-    return VerifyResult(False, "none", pred=pred_candidate)
+    return VerifyResult(False, "none", pred=pred_candidate, **result_base)
+
+
+def _verify_answer_impl(solution_str: str, ground_truth: str) -> VerifyResult:
+    """solution_str (モデル出力) を ground_truth と照合する。
+
+    OpenAI Harmony 形式に従い、special token 付きの final channel または
+    special token が落ちた `assistant final` 以降だけを reward 判定に使う。
+    analysis 側の正答は diagnostic として記録するが reward しない。
+    """
+    solution_str = str(solution_str)
+
+    has_harmony = bool(_HARMONY_TOKEN_RE.search(solution_str))
+    if has_harmony:
+        scope = _extract_harmony_scope(solution_str)
+        if scope is None:
+            return VerifyResult(
+                False,
+                "harmony_parse_failed",
+                pred=None,
+                scored_channel="final",
+                has_harmony=True,
+                has_harmony_final=False,
+            )
+    else:
+        scope = _extract_plain_assistant_final_scope(solution_str)
+        if scope is None:
+            return VerifyResult(
+                False,
+                "format_violation",
+                pred=None,
+                scored_channel="final",
+                has_harmony=False,
+                has_harmony_final=False,
+            )
+
+    if scope.final_text is None:
+        result = VerifyResult(
+            False,
+            "no_final",
+            pred=None,
+            scored_channel="final",
+            has_harmony=has_harmony,
+            has_harmony_final=False,
+        )
+    else:
+        result = _verify_answer_text_impl(scope.final_text, ground_truth)
+        result.scored_channel = "final"
+        result.has_harmony = has_harmony
+        result.has_harmony_final = True
+
+    if not result.ok and scope.analysis_text:
+        analysis_result = _verify_answer_text_impl(scope.analysis_text, ground_truth)
+        result.analysis_ok = analysis_result.ok
+        result.analysis_method = analysis_result.method
+
+    return result
 
 
 def verify_answer(solution_str: str, ground_truth: str) -> VerifyResult:
