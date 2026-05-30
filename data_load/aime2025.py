@@ -19,7 +19,7 @@ import datasets
 
 DATA_SOURCE = "yentinglin/aime_2025"
 
-#verlでの実装準拠
+# verlでの実装準拠
 INSTRUCTION = "Let's think step by step and output the final answer within \\boxed{}."
 
 
@@ -43,8 +43,11 @@ def build_row(example, idx, split):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--save_dir", default="data/AIME2025")
-    parser.add_argument("--out_name", default="test.parquet",
-                        help="Output filename (val用途なのでtest.parquet既定)")
+    parser.add_argument(
+        "--out_name",
+        default="test.parquet",
+        help="Output filename (val用途なのでtest.parquet既定)",
+    )
     args = parser.parse_args()
 
     save_dir = os.path.expanduser(args.save_dir)
