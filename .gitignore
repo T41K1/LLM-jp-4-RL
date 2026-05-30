@@ -21,7 +21,7 @@ deps/*
 !deps/verl
 .tmp/
 
-.claude/    
+.claude/
 
 #model
 model/
@@ -32,3 +32,12 @@ evals/
 docs/_build/
 docs/.cache/
 docs/generated/
+docs/
+
+# Experiment status
+exp/prod_model_RL/experiments_status.md
+
+scripts/
+.zed/debug.json
+notebook/
+*.ipynb

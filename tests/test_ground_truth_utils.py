@@ -239,7 +239,7 @@ class MathRewardComputeScoreTest(unittest.TestCase):
 
         result = compute_score(
             data_source="math",
-            solution_str="Final Answer: The final answer is 41. I hope it is correct.",
+            solution_str=r"\boxed{41}",
             ground_truth="42",
         )
         self.assertEqual(result["score"], 0.0)

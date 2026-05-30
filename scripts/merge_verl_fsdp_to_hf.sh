@@ -218,6 +218,62 @@ if bool_true "${DRY_RUN}"; then
     exit 0
 fi
 
+# --- マージ前ステージング ---
+# verl.model_merger は --trust-remote-code 時、入力 actor/huggingface から tokenizer を
+# 実際にロードする (hf_model_config_path = local_dir/huggingface, CLI 上書き不可)。
+# llm-jp-4 系は tokenizer が独自実装で、FSDP checkpoint には .py が同梱されないため、
+# ここで SOURCE_MODEL_PATH から auto_map 参照の .py を入力側へ補完しておく。
+# これをしないと merger が tokenizer ロードで失敗する。
+if bool_true "${TRUST_REMOTE_CODE}"; then
+    STAGE_SOURCE="${SOURCE_MODEL_PATH:-${BASE_MODEL_PATH:-}}"
+    if [[ -n "${STAGE_SOURCE}" && -d "${STAGE_SOURCE}" ]]; then
+        STAGE_DST="${ACTOR_DIR}/huggingface" STAGE_SRC="${STAGE_SOURCE}" uv run python - <<'PY'
+import json
+import os
+import shutil
+from pathlib import Path
+
+dst = Path(os.environ["STAGE_DST"])
+src = Path(os.environ["STAGE_SRC"])
+
+
+def auto_map_modules(cfg_path):
+    if not cfg_path.exists():
+        return
+    data = json.load(cfg_path.open(encoding="utf-8"))
+    for value in data.get("auto_map", {}).values():
+        vals = value if isinstance(value, list) else [value]
+        for v in vals:
+            if isinstance(v, str):
+                module = v.rsplit(".", 1)[0].split("--")[-1]
+                if module:
+                    yield Path(*module.split(".")).with_suffix(".py")
+
+
+needed = set(auto_map_modules(dst / "config.json"))
+needed.update(auto_map_modules(dst / "tokenizer_config.json"))
+
+for rel in sorted(needed):
+    if (dst / rel).exists():
+        continue
+    cand = src / rel
+    if not cand.exists():
+        print(f"[WARN] custom code referenced by auto_map not found in source: {cand}")
+        continue
+    (dst / rel).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(cand, dst / rel)
+    print(f"[INFO] Staged custom code into input: {cand} -> {dst / rel}")
+    # 同ディレクトリの兄弟 .py も合わせて配置
+    for sib in cand.parent.glob("*.py"):
+        if not (dst / sib.name).exists():
+            shutil.copy2(sib, dst / sib.name)
+            print(f"[INFO] Staged sibling custom code into input: {sib} -> {dst / sib.name}")
+PY
+    else
+        echo "[WARN] SOURCE_MODEL_PATH not usable for staging (='${STAGE_SOURCE}'); merger may fail on custom tokenizer"
+    fi
+fi
+
 uv run python "${MERGE_ARGS[@]}"
 
 if [[ -d "${ACTOR_DIR}/huggingface" ]]; then

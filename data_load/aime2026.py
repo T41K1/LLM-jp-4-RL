@@ -1,15 +1,15 @@
 """
-Preprocess AIME 2025 (yentinglin/aime_2025) into verl parquet format.
+Preprocess AIME 2026 (MathArena/aime_2026) into verl parquet format.
 
 Schema per row:
     data_source: str
     prompt:       list[{"role": "user", "content": str}]
     ability:      "math"
     reward_model: {"style": "rule", "ground_truth": str}   # e.g. "70"
-    extra_info:   {"split", "index", "id", "url"}
+    extra_info:   {"split", "index", "problem_idx"}
 
 Usage:
-    uv run python data_load/aime2025.py --save_dir data/AIME2025
+    uv run python data_load/aime2026.py --save_dir data/AIME2026
 """
 
 import argparse
@@ -17,7 +17,7 @@ import os
 
 import datasets
 
-DATA_SOURCE = "yentinglin/aime_2025"
+DATA_SOURCE = "MathArena/aime_2026"
 
 # verlでの実装準拠
 INSTRUCTION = "Let's think step by step and output the final answer within \\boxed{}."
@@ -34,15 +34,14 @@ def build_row(example, idx, split):
         "extra_info": {
             "split": split,
             "index": idx,
-            "id": str(example["id"]),
-            "url": example["url"],
+            "id": str(example["problem_idx"]),
         },
     }
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--save_dir", default="data/AIME2025")
+    parser.add_argument("--save_dir", default="data/AIME2026")
     parser.add_argument(
         "--out_name",
         default="test.parquet",
@@ -55,7 +54,7 @@ def main():
 
     print(f"Loading {DATA_SOURCE}...")
     ds = datasets.load_dataset(DATA_SOURCE)
-    split = "train"  # yentinglin/aime_2025 provides only 'train' (all 30 problems)
+    split = "train"  # MathArena/aime_2026 provides only 'train' (all 30 problems)
 
     formatted = ds[split].map(
         lambda ex, idx: build_row(ex, idx, split),
