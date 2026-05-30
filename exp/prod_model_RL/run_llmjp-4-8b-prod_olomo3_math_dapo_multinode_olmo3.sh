@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 #PBS -P gcg51557
-#PBS -v RTYPE=rt_HF
-#PBS -q R9920261000
-#PBS -N 0316_llm-jp-4-RL-prompt-dapo
+#PBS -N 0316_llm-jp-4-RL-olmo-math-dapo
 #PBS -l select=4
-#PBS -l walltime=500:00:00
+#PBS -l walltime=168:00:00
 #PBS -j oe
 #PBS -o logs/
 #PBS -e logs/
@@ -26,6 +24,10 @@
 # recipe submodule が必要: deps/verl/recipe が空なら
 #   git -C deps/verl submodule update --init recipe
 # select=N でノード数を変更可能
+
+
+# 使用コマンド
+#  qsub -v RTYPE=rt_HF,MY_N=8,NUM_PROMPTS=64,MINI_BATCH_SIZE=64,ADV_NORM=mean  exp/prod_model_RL/run_llmjp-4-8b-prod_olomo3_math_dapo_multinode_olmo3.sh
 
 set -xeuo pipefail
 
@@ -91,7 +93,7 @@ MODEL_PATH=model/llm-jp-4-8b-thinking
 # ADV_NORM=std  : (r - mean) / (std + eps) (オリジナル GRPO)     -> norm_adv_by_std_in_grpo=True
 ADV_NORM="${ADV_NORM:-std}"
 case "${ADV_NORM}" in
-    mean) NORM_ADV_BY_STD=False; loss_agg_mode="seq-mean-token-sum-norm"; loss_scale_factor=32768 ;;
+    mean) NORM_ADV_BY_STD=False; loss_agg_mode="token-mean"; loss_scale_factor=32768 ;;
     std)  NORM_ADV_BY_STD=True;  loss_agg_mode="token-mean";             loss_scale_factor=32768 ;;
     *) echo "[ERROR] ADV_NORM must be 'mean' or 'std', got '${ADV_NORM}'" >&2; exit 1 ;;
 esac
@@ -124,7 +126,7 @@ mkdir -p "${VAL_DUMP_DIR}"
 # train 中の rollout dump は巨大になりうるため opt-in。
 # SAVE_TRAIN_ROLLOUTS=1 なら outputs/rollout/${exp_name} に保存する。
 # TRAIN_ROLLOUT_DUMP_DIR=/path を指定した場合はそのディレクトリに保存する。
-SAVE_TRAIN_ROLLOUTS="${SAVE_TRAIN_ROLLOUTS:-1}"
+SAVE_TRAIN_ROLLOUTS="${SAVE_TRAIN_ROLLOUTS:-0}"
 TRAIN_ROLLOUT_DUMP_DIR="${TRAIN_ROLLOUT_DUMP_DIR:-}"
 if [[ "${SAVE_TRAIN_ROLLOUTS}" == "1" && -z "${TRAIN_ROLLOUT_DUMP_DIR}" ]]; then
     TRAIN_ROLLOUT_DUMP_DIR="outputs/rollout/${exp_name}"
@@ -150,9 +152,9 @@ MBS=$((${N} * ${MINI_BATCH_SIZE}))
 
 # dynamic sampling の 1 回あたり生成 prompt 数 (= gen_batch_size)。DAPO 公式に倣い既定 3 倍のところ高速化を考え、2に変更
 GEN_PROMPTS="${GEN_PROMPTS:-$((NUM_PROMPTS * 2))}"
-# Clip-Higher (DAPO): clip 上限を緩める非対称クリップ。公式既定 low=0.2 / high=0.28。
+# Clip-Higher (DAPO): clip 上限を緩める非対称クリップ。公式既定 low=0.2 / high=0.28。 OLMo3では high=0.272
 CLIP_RATIO_LOW="${CLIP_RATIO_LOW:-0.2}"
-CLIP_RATIO_HIGH="${CLIP_RATIO_HIGH:-0.28}"
+CLIP_RATIO_HIGH="${CLIP_RATIO_HIGH:-0.272}"
 echo "[INFO] DAPO clip-higher: clip_ratio_low=${CLIP_RATIO_LOW} clip_ratio_high=${CLIP_RATIO_HIGH}"
 # overlong reward shaping は OFF だが、dapo reward_manager の assert を通すため max_resp_len を渡す
 MAX_RESP_LEN=32768
@@ -183,8 +185,8 @@ python3 -m recipe.dapo.main_dapo \
     actor_rollout_ref.actor.loss_scale_factor=${loss_scale_factor} \
     actor_rollout_ref.actor.clip_ratio_low=${CLIP_RATIO_LOW} \
     actor_rollout_ref.actor.clip_ratio_high=${CLIP_RATIO_HIGH} \
-    data.train_files=data/Dolci-Think-RL-7B-math/train_boxed.parquet \
-    data.val_files='[data/AIME2024/test.parquet,data/AIME2025/test.parquet]' \
+    data.train_files=data/Dolci-Think-RL-7B-math/train.parquet \
+    data.val_files='[data/AIME2024/test.parquet,data/AIME2025/test.parquet,data/AIME2026/test.parquet]' \
     data.train_batch_size=${NUM_PROMPTS} \
     data.gen_batch_size=${GEN_PROMPTS} \
     data.max_prompt_length=2048 \
@@ -238,7 +240,7 @@ python3 -m recipe.dapo.main_dapo \
     trainer.log_val_generations=60 \
     trainer.validation_data_dir="${VAL_DUMP_DIR}" \
     "${TRAIN_ROLLOUT_DUMP_ARGS[@]}" \
-    trainer.total_epochs=15 "$@"
+    trainer.total_training_steps=1500 "$@"
 
 echo "[INFO] Training finished."
 
